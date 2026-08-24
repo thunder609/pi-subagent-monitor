@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-test/
+*.tgz
+*.log
+fix-exports*.cjs
+fix-exports*.mjs
+fix-final.cjs
+reformat.cjs
+.atl/
