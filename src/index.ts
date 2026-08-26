@@ -332,7 +332,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "r")) { this.tick(); }
     else if (matchesKey(data, "a")) { this.allCwds = !this.allCwds; this.selectedIndex = 0; this.listScroll = 0; this.tick(); }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { if (this.onRequestUnfocus) this.onRequestUnfocus(); }
-    else if (matchesKey(data, "ctrl+shift+j")) { if (this.onHide) this.onHide(); }
+    else if (matchesKey(data, "alt+h")) { if (this.onHide) this.onHide(); }
   }
   private handleDetailInput(data: string): void {
     const node = this.selectedTask ? this.taskTree.get(this.selectedTask.id) : null;
@@ -345,7 +345,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "right")) { if (node?.childrenIds.length) { const childTask = this.tasks.find(t => t.id === node.childrenIds[0]); if (childTask) this.openDetail(childTask); } }
     else if (matchesKey(data, "p")) { if (this.selectedTask && this.onProject) { this.onProject(this.selectedTask, this.detailEvents); this.invalidate(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { this.closeDetail(); this.onExpand?.(false); }
-    else if (matchesKey(data, "ctrl+shift+j")) { if (this.onHide) this.onHide(); }
+    else if (matchesKey(data, "alt+h")) { if (this.onHide) this.onHide(); }
     else if (matchesKey(data, "r")) { if (this.selectedTask) { this.detailEvents = this.fetchEvents(this.selectedTask.id); this.liveSessionLines = tailSession(this.selectedTask.nested_session_path); this.detailScroll = 0; this.followTail = true; this.invalidate(); } }
   }
   private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "detail"; this.invalidate(); }
@@ -418,7 +418,7 @@ class SubagentMonitorComponent implements Component {
     const below = this.listScroll + this.lastVisibleRows < totalTasks ? color("↓" + (totalTasks - this.listScroll - this.lastVisibleRows) + " ", "cyan") : "";
     const barContent = liveBadge + " " + color(truncate(currentName, 18), "white") + " " + above + below + color("[Enter] vivo ", "cyan") + color("[r] ↻ ", "yellow") + color("[a] all", "cyan");
     lines.push(boxLine(barContent, W));
-    const help = "[↑/↓] select • [Enter] expand • [ctrl+q] focus • [ctrl+shift+j] hide • Tasks: " + totalTasks;
+    const help = "[↑/↓] select • [Enter] expand • [ctrl+q] focus • [alt+h] hide • Tasks: " + totalTasks;
     lines.push(boxLine(color(help, "dim"), W));
     lines.push(boxBottom(W));
   }
@@ -653,17 +653,17 @@ function extension(pi: ExtensionAPI) {
           ctx.ui.notify(focused ? "Monitor focused — ↑/↓ select, Enter details, Esc to release" : "Focus released to chat", "info");
         },
       });
-      pi.registerShortcut("ctrl+shift+j", {
-        description: "Hide subagent monitor panel",
+      pi.registerShortcut("alt+h", {
+        description: "Hide subagent monitor panel (also: /subagent-monitor-hide)",
         handler: async (ctx) => {
           const controller = getController();
           if (!controller) return;
           controller.hide();
-          ctx.ui.notify("Monitor hidden — /subagent-monitor-show to restore", "info");
+          ctx.ui.notify("Monitor hidden — alt+s or /subagent-monitor-show to restore", "info");
         },
       });
-      pi.registerShortcut("ctrl+shift+k", {
-        description: "Show subagent monitor panel",
+      pi.registerShortcut("alt+s", {
+        description: "Show subagent monitor panel (also: /subagent-monitor-show)",
         handler: async (ctx) => {
           const controller = getController();
           if (!controller) return;
