@@ -267,12 +267,13 @@ class SubagentMonitorComponent implements Component {
   private onProject?: (task: SubagentTask, events: SubagentEvent[]) => void;
   private onRequestUnfocus?: () => void;
   private onExpand?: (expanded: boolean) => void;
+  private onHide?: () => void;
 
-  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void } = {}) {
+  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void } = {}) {
     this.dbPath = options.dbPath || DEFAULT_DB_PATH;
     this.cwd = options.cwd || process.cwd(); this.allCwds = options.allCwds || false;
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS; this.onProject = options.onProject; this.onRequestUnfocus = options.onRequestUnfocus; this.onExpand = options.onExpand;
-    this.heightProvider = options.heightProvider;
+    this.heightProvider = options.heightProvider; this.onHide = options.onHide;
   }
   /** Target full height in rows for stretching the panel vertically. */
   private targetHeight(): number { const h = this.heightProvider ? this.heightProvider() : 0; return h >= 14 ? h : 24; }
@@ -331,6 +332,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "r")) { this.tick(); }
     else if (matchesKey(data, "a")) { this.allCwds = !this.allCwds; this.selectedIndex = 0; this.listScroll = 0; this.tick(); }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { if (this.onRequestUnfocus) this.onRequestUnfocus(); }
+    else if (matchesKey(data, "ctrl+shift+j")) { if (this.onHide) this.onHide(); }
   }
   private handleDetailInput(data: string): void {
     const node = this.selectedTask ? this.taskTree.get(this.selectedTask.id) : null;
@@ -343,6 +345,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "right")) { if (node?.childrenIds.length) { const childTask = this.tasks.find(t => t.id === node.childrenIds[0]); if (childTask) this.openDetail(childTask); } }
     else if (matchesKey(data, "p")) { if (this.selectedTask && this.onProject) { this.onProject(this.selectedTask, this.detailEvents); this.invalidate(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { this.closeDetail(); this.onExpand?.(false); }
+    else if (matchesKey(data, "ctrl+shift+j")) { if (this.onHide) this.onHide(); }
     else if (matchesKey(data, "r")) { if (this.selectedTask) { this.detailEvents = this.fetchEvents(this.selectedTask.id); this.liveSessionLines = tailSession(this.selectedTask.nested_session_path); this.detailScroll = 0; this.followTail = true; this.invalidate(); } }
   }
   private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "detail"; this.invalidate(); }
@@ -551,6 +554,7 @@ class MonitorController implements Component {
       onProject: (task, events) => this.openProjectedLog(task, events),
       onRequestUnfocus: () => { this.monitorHandle?.unfocus(); this.tui?.requestRender(); },
       onExpand: (x) => { if (x) this.expand(); else this.collapse(); },
+      onHide: () => this.hide(),
     });
     this.monitor.start(); this.createOverlay();
   }
