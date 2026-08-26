@@ -415,7 +415,7 @@ class SubagentMonitorComponent implements Component {
     const below = this.listScroll + this.lastVisibleRows < totalTasks ? color("↓" + (totalTasks - this.listScroll - this.lastVisibleRows) + " ", "cyan") : "";
     const barContent = liveBadge + " " + color(truncate(currentName, 18), "white") + " " + above + below + color("[Enter] vivo ", "cyan") + color("[r] ↻ ", "yellow") + color("[a] all", "cyan");
     lines.push(boxLine(barContent, W));
-    const help = "[↑/↓] select • [Enter] expand • [ctrl+q] focus • Tasks: " + totalTasks;
+    const help = "[↑/↓] select • [Enter] expand • [ctrl+q] focus • [ctrl+h] hide • Tasks: " + totalTasks;
     lines.push(boxLine(color(help, "dim"), W));
     lines.push(boxBottom(W));
   }
@@ -630,6 +630,24 @@ function extension(pi: ExtensionAPI) {
           if (!controller) return;
           const focused = controller.toggleFocus();
           ctx.ui.notify(focused ? "Monitor focused — ↑/↓ select, Enter details, Esc to release" : "Focus released to chat", "info");
+        },
+      });
+      pi.registerShortcut("ctrl+h", {
+        description: "Hide subagent monitor panel",
+        handler: async (ctx) => {
+          const controller = getController();
+          if (!controller) return;
+          controller.hide();
+          ctx.ui.notify("Monitor hidden — ctrl+shift+h to show", "info");
+        },
+      });
+      pi.registerShortcut("ctrl+shift+h", {
+        description: "Show subagent monitor panel",
+        handler: async (ctx) => {
+          const controller = getController();
+          if (!controller) return;
+          controller.show();
+          ctx.ui.notify("Monitor shown", "info");
         },
       });
     } catch { /* another copy already registered this shortcut */ }
