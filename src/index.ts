@@ -632,6 +632,15 @@ function extension(pi: ExtensionAPI) {
   };
   pi.registerCommand("subagent-monitor", { description: "Toggle subagent monitor side panel (current CWD)", handler: async (_args: string, ctx: ExtensionCommandContext) => { await toggleMonitor(ctx, false); } });
   pi.registerCommand("subagent-monitor-all", { description: "Toggle subagent monitor side panel (all CWDs)", handler: async (_args: string, ctx: ExtensionCommandContext) => { await toggleMonitor(ctx, true); } });
+  // slash commands that ALWAYS work regardless of terminal keyboard protocol
+  pi.registerCommand("subagent-monitor-hide", { description: "Hide the subagent monitor panel", handler: async (_a: string, ctx: ExtensionCommandContext) => {
+    const c = getController(); if (!c) return ctx.ui.notify("Monitor not open", "info");
+    c.hide(); ctx.ui.notify("Monitor hidden", "info");
+  }});
+  pi.registerCommand("subagent-monitor-show", { description: "Show the subagent monitor panel", handler: async (_a: string, ctx: ExtensionCommandContext) => {
+    const c = getController(); if (!c) return ctx.ui.notify("Monitor not open", "info");
+    c.show(); ctx.ui.notify("Monitor shown", "info");
+  }});
   if (!g[SHORTCUT_FLAG]) {
     g[SHORTCUT_FLAG] = true;
     try {
@@ -650,7 +659,7 @@ function extension(pi: ExtensionAPI) {
           const controller = getController();
           if (!controller) return;
           controller.hide();
-          ctx.ui.notify("Monitor hidden — ctrl+shift+k to show", "info");
+          ctx.ui.notify("Monitor hidden — /subagent-monitor-show to restore", "info");
         },
       });
       pi.registerShortcut("ctrl+shift+k", {
