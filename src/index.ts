@@ -542,7 +542,7 @@ class MonitorController implements Component {
   private monitor: SubagentMonitorComponent; private tui: TUI | null = null;
   private monitorHandle: OverlayHandle | null = null; private projectedHandle: OverlayHandle | null = null;
   private fsHandle: OverlayHandle | null = null; private expanded = false;
-  private allCwds: boolean;
+  private allCwds: boolean; private hidden = false;
   constructor(tui: TUI, allCwds: boolean) {
     this.tui = tui; this.allCwds = allCwds;
     this.monitor = new SubagentMonitorComponent({
@@ -590,11 +590,19 @@ class MonitorController implements Component {
   }
   invalidate(): void { this.monitor.invalidate(); }
   render(width: number): string[] { return []; }
-  dispose(): void { this.monitor.stop(); this.closeProjectedLog(); this.fsHandle?.hide(); this.fsHandle = null; if (this.monitorHandle) { this.monitorHandle.setHidden(true); this.monitorHandle = null; } }
+  dispose(): void { this.monitor.stop(); this.closeProjectedLog(); this.fsHandle?.hide(); this.fsHandle = null; if (this.monitorHandle) { this.monitorHandle.setHidden(true); this.monitorHandle = null; } this.hidden = false; }
   getMonitor(): SubagentMonitorComponent { return this.monitor; }
   getHandle(): OverlayHandle | null { return this.monitorHandle; }
-  show(): void { if (this.monitorHandle) this.monitorHandle.setHidden(false); }
-  hide(): void { if (this.monitorHandle) this.monitorHandle.setHidden(true); }
+  hide(): void {
+    this.hidden = true;
+    if (this.expanded) { this.fsHandle?.hide(); this.fsHandle = null; this.expanded = false; }
+    if (this.monitorHandle) this.monitorHandle.setHidden(true);
+  }
+  show(): void {
+    this.hidden = false;
+    if (this.monitorHandle) { this.monitorHandle.setHidden(false); }
+    else { this.createOverlay(); }
+  }
 }
 
 // --- Extension entry point ---
