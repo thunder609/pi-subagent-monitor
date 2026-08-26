@@ -93,8 +93,8 @@ The panel also auto-opens on `session_start` when a UI is present.
 | Shortcut | Action |
 | --- | --- |
 | `ctrl+q` | Focus / unfocus the panel |
-| `ctrl+h` | Hide the panel |
-| `ctrl+shift+h` | Show the panel |
+| `ctrl+alt+h` | Hide the panel |
+| `ctrl+alt+s` | Show the panel |
 
 ## Use as a library
 
