@@ -308,11 +308,13 @@ class SubagentMonitorComponent implements Component {
   private onRequestUnfocus?: () => void;
   private onExpand?: (expanded: boolean) => void;
   private onHide?: () => void;
+  private onTaskFinished?: (task: SubagentTask) => void;
+  private prevTaskStatus = new Map<string, string>();
 
-  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; dbMode?: MonitorDbMode; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void } = {}) {
+  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; dbMode?: MonitorDbMode; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void; onTaskFinished?: (task: SubagentTask) => void } = {}) {
     this.cwd = options.cwd || process.cwd(); this.allCwds = options.allCwds || false;
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS; this.onProject = options.onProject; this.onRequestUnfocus = options.onRequestUnfocus; this.onExpand = options.onExpand;
-    this.heightProvider = options.heightProvider; this.onHide = options.onHide;
+    this.heightProvider = options.heightProvider; this.onHide = options.onHide; this.onTaskFinished = options.onTaskFinished;
     this.dbMode = options.dbMode ?? "auto";
     this.dbPath = options.dbPath || resolveMonitorDbPath(this.dbMode, this.cwd);
   }
@@ -362,6 +364,20 @@ class SubagentMonitorComponent implements Component {
     try {
       this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
       this.tasks = this.fetchTasks(); this.refreshTree();
+      // Notify when a task transitions into a terminal state (completed/failed/...).
+      const FINAL: Record<string, boolean> = { completed: true, failed: true, cancelled: true, canceled: true };
+      for (const t of this.tasks) {
+        const prev = this.prevTaskStatus.get(t.id);
+        if (prev !== undefined && prev !== t.status && prev !== "completed" && prev !== "failed" && prev !== "cancelled" && prev !== "canceled" && FINAL[t.status]) {
+          try { this.onTaskFinished?.(t); } catch { }
+        }
+        this.prevTaskStatus.set(t.id, t.status);
+      }
+      // Forget tasks that left the visible window so a later reappearance is re-notified.
+      if (this.prevTaskStatus.size > this.tasks.length * 2) {
+        const live = new Set(this.tasks.map(t => t.id));
+        for (const id of [...this.prevTaskStatus.keys()]) if (!live.has(id)) this.prevTaskStatus.delete(id);
+      }
       if (this.selectedIndex >= this.tasks.length) this.selectedIndex = Math.max(0, this.tasks.length - 1);
       if (this.viewMode === "detail" && this.selectedTask) {
         const stillExists = this.tasks.some(t => t.id === this.selectedTask!.id);
@@ -426,6 +442,13 @@ class SubagentMonitorComponent implements Component {
     lines.push(boxLine(color("CWD:", "dim") + " " + color(cwdShort, "white"), W));
     const dbBadge = this.dbMode === "project" ? "DB:P" : this.dbMode === "global" ? "DB:G" : "DB:A";
     lines.push(boxLine(color("DB:", "dim") + " " + color(dbBadge, "cyan") + color(" " + basename(this.dbPath), "dim"), W));
+    const visible = this.tasks;
+    let cost = 0, inTok = 0, outTok = 0, done = 0, failed = 0;
+    for (const t of visible) { cost += t.usage_cost || 0; inTok += t.usage_input || 0; outTok += t.usage_output || 0; if (t.status === "completed") done++; else if (t.status === "failed") failed++; }
+    const okRate = done + failed > 0 ? Math.round((done / (done + failed)) * 100) : null;
+    const costStr = cost > 0 ? formatCost(cost) : "";
+    const sumStr = [done + failed > 0 ? `✓${done}✗${failed}` : "", okRate !== null ? `${okRate}%` : "", costStr, inTok + outTok > 0 ? `${formatTokens(inTok + outTok)}` : ""].filter(Boolean).join(" · ");
+    lines.push(boxLine(color(sumStr || "no tasks", "dim"), W));
     if (this.dbError) lines.push(boxLine(color("DB Error: " + this.dbError, "red"), W));
     lines.push(boxSep(W));
 
@@ -602,7 +625,7 @@ class MonitorController implements Component {
   private monitorHandle: OverlayHandle | null = null; private projectedHandle: OverlayHandle | null = null;
   private fsHandle: OverlayHandle | null = null; private expanded = false;
   private allCwds: boolean; private hidden = false;
-  constructor(tui: TUI, allCwds: boolean, dbMode: MonitorDbMode = "auto") {
+  constructor(tui: TUI, allCwds: boolean, dbMode: MonitorDbMode = "auto", notify?: (msg: string, kind?: string) => void) {
     this.tui = tui; this.allCwds = allCwds;
     this.monitor = new SubagentMonitorComponent({
       allCwds, intervalMs: 1000, dbMode,
@@ -611,6 +634,12 @@ class MonitorController implements Component {
       onRequestUnfocus: () => { this.monitorHandle?.unfocus(); this.tui?.requestRender(); },
       onExpand: (x) => { if (x) this.expand(); else this.collapse(); },
       onHide: () => this.hide(),
+      onTaskFinished: (task) => {
+        if (!notify) return;
+        const agent = task.agent || "subagent";
+        if (task.status === "failed") notify(`✗ ${agent} failed — ${(task.last_activity || "").slice(0, 80)}`, "error");
+        else notify(`✓ ${agent} ${task.status} — ${formatTokens((task.usage_input || 0) + (task.usage_output || 0))} tokens`, "info");
+      },
     });
     this.monitor.start(); this.createOverlay();
   }
@@ -686,7 +715,7 @@ function extension(pi: ExtensionAPI) {
     currentAllCwds = allCwds;
     const existing = getController();
     if (existing) { existing.dispose(); setController(null); ctx.ui.notify("Subagent monitor closed", "info"); }
-    else { await ctx.ui.custom<void>((tui, _theme, _kb, done) => { setController(new MonitorController(tui, allCwds, currentDbMode)); done(); return getController() as MonitorController; }, { overlay: false }); ctx.ui.notify("Subagent monitor opened (right side)", "info"); }
+    else { await ctx.ui.custom<void>((tui, _theme, _kb, done) => { setController(new MonitorController(tui, allCwds, currentDbMode, (msg, kind) => ctx.ui.notify(msg, (kind || "info") as any))); done(); return getController() as MonitorController; }, { overlay: false }); ctx.ui.notify("Subagent monitor opened (right side)", "info"); }
   };
   pi.registerCommand("subagent-monitor", { description: "Toggle subagent monitor side panel (current CWD)", handler: async (_args: string, ctx: ExtensionCommandContext) => { await toggleMonitor(ctx, false); } });
   pi.registerCommand("subagent-monitor-all", { description: "Toggle subagent monitor side panel (all CWDs)", handler: async (_args: string, ctx: ExtensionCommandContext) => { await toggleMonitor(ctx, true); } });
@@ -700,16 +729,13 @@ function extension(pi: ExtensionAPI) {
     c.show(); ctx.ui.notify("Monitor shown", "info");
   }});
   pi.registerCommand("subagent-monitor-install", { description: "Install pi-subagent-monitor globally or locally", handler: async (_a: string, ctx: ExtensionCommandContext) => {
-    const choice = await ctx.ui.ask("Where do you want to install pi-subagent-monitor?", [
-      { label: "Global (npm)", description: "Install via npm globally - pi discovers it automatically" },
-      { label: "Local (directory)", description: "Copy to a local directory and configure settings.json" },
-    ]);
+    const choice = await ctx.ui.select("Where do you want to install pi-subagent-monitor?", ["Global (npm)", "Local (directory)"]);
     if (!choice) { ctx.ui.notify("Installation cancelled", "info"); return; }
     if (choice === "Global (npm)") {
       ctx.ui.notify("Run: npm install -g pi-subagent-monitor", "info");
       ctx.ui.notify("Then add \"npm:pi-subagent-monitor\" to settings.json packages array", "info");
     } else {
-      const dir = await ctx.ui.ask("Enter the local directory path (e.g., ~/.pi/extensions):", []);
+      const dir = await ctx.ui.input("Enter the local directory path (e.g., ~/.pi/extensions):", "~/.pi/extensions");
       if (!dir) { ctx.ui.notify("Installation cancelled", "info"); return; }
       ctx.ui.notify(`Copy dist/index.js to ${dir}/pi-subagent-monitor/`, "info");
       ctx.ui.notify(`Add "${dir}/pi-subagent-monitor/index.js" to settings.json extensions array`, "info");
@@ -718,11 +744,7 @@ function extension(pi: ExtensionAPI) {
   pi.registerCommand("subagent-monitor-db", { description: "Switch monitor database scope (auto / project / global)", handler: async (_a: string, ctx: ExtensionCommandContext) => {
     const c = getController();
     const hint = c ? ` (current: ${c.getMonitor().getDbMode()})` : "";
-    const choice = await ctx.ui.ask(`Which database scope for the monitor?${hint}`, [
-      { label: "Auto", description: "PI_SUBAGENTS_HISTORY_DB_PATH env → per-project DB if it exists → global" },
-      { label: "Global", description: "Shared subagents-history.sqlite (all projects)" },
-      { label: "Project", description: "subagents-history-<project>.sqlite for the current CWD" },
-    ]);
+    const choice = await ctx.ui.select(`Which database scope for the monitor?${hint}`, ["Auto", "Global", "Project"]);
     if (!choice) { ctx.ui.notify("DB scope change cancelled", "info"); return; }
     const mode: MonitorDbMode = choice === "Global" ? "global" : choice === "Project" ? "project" : "auto";
     currentDbMode = mode;
