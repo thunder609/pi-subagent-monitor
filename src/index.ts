@@ -641,6 +641,22 @@ function extension(pi: ExtensionAPI) {
     const c = getController(); if (!c) return ctx.ui.notify("Monitor not open", "info");
     c.show(); ctx.ui.notify("Monitor shown", "info");
   }});
+  pi.registerCommand("subagent-monitor-install", { description: "Install pi-subagent-monitor globally or locally", handler: async (_a: string, ctx: ExtensionCommandContext) => {
+    const choice = await ctx.ui.ask("Where do you want to install pi-subagent-monitor?", [
+      { label: "Global (npm)", description: "Install via npm globally - pi discovers it automatically" },
+      { label: "Local (directory)", description: "Copy to a local directory and configure settings.json" },
+    ]);
+    if (!choice) { ctx.ui.notify("Installation cancelled", "info"); return; }
+    if (choice === "Global (npm)") {
+      ctx.ui.notify("Run: npm install -g pi-subagent-monitor", "info");
+      ctx.ui.notify("Then add \"npm:pi-subagent-monitor\" to settings.json packages array", "info");
+    } else {
+      const dir = await ctx.ui.ask("Enter the local directory path (e.g., ~/.pi/extensions):", []);
+      if (!dir) { ctx.ui.notify("Installation cancelled", "info"); return; }
+      ctx.ui.notify(`Copy dist/index.js to ${dir}/pi-subagent-monitor/`, "info");
+      ctx.ui.notify(`Add "${dir}/pi-subagent-monitor/index.js" to settings.json extensions array`, "info");
+    }
+  }});
   if (!g[SHORTCUT_FLAG]) {
     g[SHORTCUT_FLAG] = true;
     try {
