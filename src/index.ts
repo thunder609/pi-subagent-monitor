@@ -1,8 +1,9 @@
 import { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Component, OverlayHandle, TUI, KeybindingsManager, visibleWidth, matchesKey } from "@earendil-works/pi-tui";
-import { join } from "path";
+import { join, dirname, basename, resolve } from "path";
 import { homedir } from "os";
 import { openSync, readSync, closeSync, fstatSync, existsSync } from "fs";
+import { execSync } from "child_process";
 import { createRequire as createNodeRequire } from "module";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
 
@@ -14,6 +15,44 @@ const { DatabaseSync } = nodeRequire("node:sqlite") as typeof import("node:sqlit
 
 export const DEFAULT_DB_PATH = join(homedir(), ".local/share/pi/subagents/subagents-history.sqlite");
 export const DEFAULT_INTERVAL_MS = 1000;
+
+// --- Database scoping ---
+// The GENERATOR (pi-subagents-j0k3r) honors PI_SUBAGENTS_HISTORY_DB_PATH (explicit
+// file) and PI_SUBAGENTS_HISTORY_HOME (directory). The monitor mirrors that so the
+// user can read either the shared global DB or a project-scoped one:
+//   auto    -> env var if set, else project DB if it exists, else global
+//   project -> subagents-history-<project>.sqlite next to the global DB
+//   global  -> the shared subagents-history.sqlite
+export type MonitorDbMode = "auto" | "project" | "global";
+
+/** Derive a stable project name from a working directory: git root basename,
+ *  falling back to the cwd basename. */
+export function projectNameForCwd(cwd: string): string {
+  const envName = process.env.PI_SUBAGENTS_PROJECT_NAME;
+  if (envName && envName.trim()) return envName.trim();
+  try {
+    const root = execSync("git rev-parse --show-toplevel", { cwd, encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (root) return basename(root);
+  } catch { /* not a git repo — fall through */ }
+  return basename(cwd) || "project";
+}
+
+function slugify(name: string): string { return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project"; }
+
+export function projectScopedDbPath(cwd: string): string {
+  return join(dirname(DEFAULT_DB_PATH), `subagents-history-${slugify(projectNameForCwd(cwd))}.sqlite`);
+}
+
+/** Effective DB path for a mode: the generator writes the same file when
+ *  PI_SUBAGENTS_HISTORY_DB_PATH is set, so the monitor must honor it first. */
+export function resolveMonitorDbPath(mode: MonitorDbMode, cwd: string): string {
+  if (mode === "project") return projectScopedDbPath(cwd);
+  if (mode === "global") return DEFAULT_DB_PATH;
+  const envPath = process.env.PI_SUBAGENTS_HISTORY_DB_PATH;
+  if (envPath) return resolve(envPath);
+  const projectDb = projectScopedDbPath(cwd);
+  return existsSync(projectDb) ? projectDb : DEFAULT_DB_PATH;
+}
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -260,6 +299,7 @@ class SubagentMonitorComponent implements Component {
   private viewMode: ViewMode = "list"; private selectedIndex = 0;
   private selectedTask: SubagentTask | null = null; private detailEvents: SubagentEvent[] = [];
   private detailScroll = 0; private projectMode = false;
+  private dbMode: MonitorDbMode = "auto";
   private listScroll = 0; private lastVisibleRows = 10;
   private followTail = true; private spinnerFrame = 0;
   private liveSessionLines: SessionLine[] = [];
@@ -269,14 +309,28 @@ class SubagentMonitorComponent implements Component {
   private onExpand?: (expanded: boolean) => void;
   private onHide?: () => void;
 
-  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void } = {}) {
-    this.dbPath = options.dbPath || DEFAULT_DB_PATH;
+  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; dbMode?: MonitorDbMode; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void } = {}) {
     this.cwd = options.cwd || process.cwd(); this.allCwds = options.allCwds || false;
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS; this.onProject = options.onProject; this.onRequestUnfocus = options.onRequestUnfocus; this.onExpand = options.onExpand;
     this.heightProvider = options.heightProvider; this.onHide = options.onHide;
+    this.dbMode = options.dbMode ?? "auto";
+    this.dbPath = options.dbPath || resolveMonitorDbPath(this.dbMode, this.cwd);
   }
   /** Target full height in rows for stretching the panel vertically. */
   private targetHeight(): number { const h = this.heightProvider ? this.heightProvider() : 0; return h >= 14 ? h : 24; }
+  getDbMode(): MonitorDbMode { return this.dbMode; }
+  getDbPath(): string { return this.dbPath; }
+  /** Switch the DB scope live: reconnect to the new file and refresh. */
+  setDbMode(mode: MonitorDbMode): void {
+    this.dbMode = mode;
+    this.dbPath = resolveMonitorDbPath(mode, this.cwd);
+    if (this.running) {
+      this.disconnect(); this.connect();
+      this.tasks = this.fetchTasks(); this.refreshTree();
+      this.selectedIndex = 0; this.viewMode = "list"; this.selectedTask = null;
+    }
+    this.invalidate();
+  }
   setAllCwds(all: boolean): void { this.allCwds = all; this.invalidate(); }
   private connect(): boolean {
     try { this.db = new DatabaseSync(this.dbPath, { readOnly: true }); this.dbError = null; return true; }
@@ -370,6 +424,8 @@ class SubagentMonitorComponent implements Component {
     lines.push(boxSep(W));
     const cwdShort = this.allCwds ? "ALL" : this.cwd.replace(homedir(), "~");
     lines.push(boxLine(color("CWD:", "dim") + " " + color(cwdShort, "white"), W));
+    const dbBadge = this.dbMode === "project" ? "DB:P" : this.dbMode === "global" ? "DB:G" : "DB:A";
+    lines.push(boxLine(color("DB:", "dim") + " " + color(dbBadge, "cyan") + color(" " + basename(this.dbPath), "dim"), W));
     if (this.dbError) lines.push(boxLine(color("DB Error: " + this.dbError, "red"), W));
     lines.push(boxSep(W));
 
@@ -546,10 +602,10 @@ class MonitorController implements Component {
   private monitorHandle: OverlayHandle | null = null; private projectedHandle: OverlayHandle | null = null;
   private fsHandle: OverlayHandle | null = null; private expanded = false;
   private allCwds: boolean; private hidden = false;
-  constructor(tui: TUI, allCwds: boolean) {
+  constructor(tui: TUI, allCwds: boolean, dbMode: MonitorDbMode = "auto") {
     this.tui = tui; this.allCwds = allCwds;
     this.monitor = new SubagentMonitorComponent({
-      allCwds, intervalMs: 1000,
+      allCwds, intervalMs: 1000, dbMode,
       heightProvider: () => (this.tui ? this.tui.terminal.rows : 24),
       onProject: (task, events) => this.openProjectedLog(task, events),
       onRequestUnfocus: () => { this.monitorHandle?.unfocus(); this.tui?.requestRender(); },
@@ -597,6 +653,7 @@ class MonitorController implements Component {
   dispose(): void { this.monitor.stop(); this.closeProjectedLog(); this.fsHandle?.hide(); this.fsHandle = null; if (this.monitorHandle) { this.monitorHandle.setHidden(true); this.monitorHandle = null; } this.hidden = false; }
   getMonitor(): SubagentMonitorComponent { return this.monitor; }
   getHandle(): OverlayHandle | null { return this.monitorHandle; }
+  setDbMode(mode: MonitorDbMode): string { this.monitor.setDbMode(mode); return this.monitor.getDbPath(); }
   hide(): void {
     this.hidden = true;
     if (this.expanded) { this.fsHandle?.hide(); this.fsHandle = null; this.expanded = false; }
@@ -611,6 +668,7 @@ class MonitorController implements Component {
 
 // --- Extension entry point ---
 let currentAllCwds = true;
+let currentDbMode: MonitorDbMode = "auto";
 
 // Multiple copies of this extension can be loaded in one process (e.g. a
 // user-scope bundle plus a project-local shim). Guard process-wide state so
@@ -628,7 +686,7 @@ function extension(pi: ExtensionAPI) {
     currentAllCwds = allCwds;
     const existing = getController();
     if (existing) { existing.dispose(); setController(null); ctx.ui.notify("Subagent monitor closed", "info"); }
-    else { await ctx.ui.custom<void>((tui, _theme, _kb, done) => { setController(new MonitorController(tui, allCwds)); done(); return getController() as MonitorController; }, { overlay: false }); ctx.ui.notify("Subagent monitor opened (right side)", "info"); }
+    else { await ctx.ui.custom<void>((tui, _theme, _kb, done) => { setController(new MonitorController(tui, allCwds, currentDbMode)); done(); return getController() as MonitorController; }, { overlay: false }); ctx.ui.notify("Subagent monitor opened (right side)", "info"); }
   };
   pi.registerCommand("subagent-monitor", { description: "Toggle subagent monitor side panel (current CWD)", handler: async (_args: string, ctx: ExtensionCommandContext) => { await toggleMonitor(ctx, false); } });
   pi.registerCommand("subagent-monitor-all", { description: "Toggle subagent monitor side panel (all CWDs)", handler: async (_args: string, ctx: ExtensionCommandContext) => { await toggleMonitor(ctx, true); } });
@@ -655,6 +713,24 @@ function extension(pi: ExtensionAPI) {
       if (!dir) { ctx.ui.notify("Installation cancelled", "info"); return; }
       ctx.ui.notify(`Copy dist/index.js to ${dir}/pi-subagent-monitor/`, "info");
       ctx.ui.notify(`Add "${dir}/pi-subagent-monitor/index.js" to settings.json extensions array`, "info");
+    }
+  }});
+  pi.registerCommand("subagent-monitor-db", { description: "Switch monitor database scope (auto / project / global)", handler: async (_a: string, ctx: ExtensionCommandContext) => {
+    const c = getController();
+    const hint = c ? ` (current: ${c.getMonitor().getDbMode()})` : "";
+    const choice = await ctx.ui.ask(`Which database scope for the monitor?${hint}`, [
+      { label: "Auto", description: "PI_SUBAGENTS_HISTORY_DB_PATH env → per-project DB if it exists → global" },
+      { label: "Global", description: "Shared subagents-history.sqlite (all projects)" },
+      { label: "Project", description: "subagents-history-<project>.sqlite for the current CWD" },
+    ]);
+    if (!choice) { ctx.ui.notify("DB scope change cancelled", "info"); return; }
+    const mode: MonitorDbMode = choice === "Global" ? "global" : choice === "Project" ? "project" : "auto";
+    currentDbMode = mode;
+    if (c) {
+      const path = c.setDbMode(mode);
+      ctx.ui.notify(`Monitor DB scope: ${mode} → ${path}`, "info");
+    } else {
+      ctx.ui.notify(`DB scope set to ${mode} (applies when the monitor opens)`, "info");
     }
   }});
   if (!g[SHORTCUT_FLAG]) {

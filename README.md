@@ -73,8 +73,28 @@ Or point directly at the built entry file:
 | --- | --- |
 | `subagent-monitor` | Toggle the side panel for the current CWD |
 | `subagent-monitor-all` | Toggle the side panel across all CWDs |
+| `subagent-monitor-db` | Switch database scope (auto / project / global) |
+| `subagent-monitor-install` | Show how to install the extension globally or locally |
 
 The panel also auto-opens on `session_start` when a UI is present.
+
+### Database scoping
+
+The panel reads the history SQLite database that the subagent generator writes. By default the scope is **auto**:
+
+1. Use `PI_SUBAGENTS_HISTORY_DB_PATH` if set (the generator honors the same variable)
+2. Otherwise use a per-project database `subagents-history-<project>.sqlite` if one exists
+3. Otherwise fall back to the shared global database
+
+The project name is the git root basename (or the cwd basename when not in a git repo); you can pin it with `PI_SUBAGENTS_PROJECT_NAME`.
+
+To keep separate per-project history, launch the agent generator with a project-scoped path:
+
+```bash
+PI_SUBAGENTS_HISTORY_DB_PATH=~/.local/share/pi/subagents/subagents-history-my-project.sqlite pi
+```
+
+The panel header shows the active scope as `DB:A` (auto), `DB:P` (project), or `DB:G` (global) with the database file name.
 
 ### Panel controls
 
