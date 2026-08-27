@@ -1,8 +1,8 @@
 # pi-subagent-monitor
 
-A [Pi](https://github.com/badlogic/pi-mono) coding-agent extension (and embeddable TUI component) that shows **live `pi-subagents` activity** in a side panel — tasks, status, tokens, cost, duration, and full event logs.
+A [Pi](https://github.com/badlogic/pi-mono) coding-agent extension (and embeddable TUI component) that shows **live `pi-subagents-j0k3r` activity** in a side panel — tasks, status, tokens, cost, duration, and full event logs.
 
-Read-only by design: it never touches your agent sessions. It watches the subagent history database that [`pi-subagents`](https://www.npmjs.com/package/pi-subagents-j0k3r) writes and renders it.
+Read-only by design: it never touches your agent sessions. It watches the subagent history database that [`pi-subagents-j0k3r`](https://www.npmjs.com/package/pi-subagents-j0k3r) writes and renders it.
 
 ## Features
 
@@ -18,10 +18,10 @@ Read-only by design: it never touches your agent sessions. It watches the subage
 ## How it works
 
 ```
-pi-subagents ──writes──> ~/.local/share/pi/subagents/subagents-history.sqlite
-                                        │
-                                        ▼ (read-only, 1s poll)
-                        pi-subagent-monitor side panel
+pi-subagents-j0k3r ──writes──> ~/.local/share/pi/subagents/subagents-history.sqlite
+                                         │
+                                         ▼ (read-only, 1s poll)
+                         pi-subagent-monitor side panel
 ```
 
 The monitor polls the SQLite history database (via the built-in `node:sqlite`
@@ -47,12 +47,12 @@ npm install -g pi-subagent-monitor
 
 ## Use as a Pi extension
 
-Add it to your `~/.pi/agent/settings.json`:
+Add it to the `packages` array of your `~/.pi/agent/settings.json`:
 
 ```jsonc
 {
-  "extensions": [
-    "pi-subagent-monitor"
+  "packages": [
+    "npm:pi-subagent-monitor"
   ]
 }
 ```
@@ -75,6 +75,8 @@ Or point directly at the built entry file:
 | `subagent-monitor-all` | Toggle the side panel across all CWDs |
 | `subagent-monitor-db` | Switch database scope (auto / project / global) |
 | `subagent-monitor-install` | Show how to install the extension globally or locally |
+| `/subagent-monitor-hide` | Hide the panel (works in every terminal) |
+| `/subagent-monitor-show` | Show the panel (works in every terminal) |
 
 The panel also auto-opens on `session_start` when a UI is present.
 
@@ -132,16 +134,18 @@ import {
   formatDuration,
   formatTokens,
   formatCost,
-  statusColor,
   modeBadge,
   DEFAULT_DB_PATH,
   DEFAULT_INTERVAL_MS,
+  resolveMonitorDbPath,
+  projectScopedDbPath,
+  projectNameForCwd,
   type SubagentTask,
   type SubagentEvent,
   type SessionLine,
-  type Theme,
   type ViewMode,
   type TaskNode,
+  type MonitorDbMode,
 } from "pi-subagent-monitor";
 ```
 
@@ -150,7 +154,9 @@ import {
 - `MonitorController` — wires the monitor into a `TUI` overlay and handles projection
 - `buildTaskTree` — organizes flat tasks into a parent/child/sibling tree using `session_id` / `nested_session_path`
 - `tailSession` — reads recent conversation lines from a subagent session JSONL
-- `formatDuration` / `formatTokens` / `formatCost` / `statusColor` / `modeBadge` — display helpers
+- `formatDuration` / `formatTokens` / `formatCost` / `modeBadge` — display helpers
+- `resolveMonitorDbPath` / `projectScopedDbPath` / `projectNameForCwd` — database scoping helpers
+- `MonitorDbMode` — `"auto" | "project" | "global"` database scope type
 
 ## Development
 
