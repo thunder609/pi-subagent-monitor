@@ -700,16 +700,13 @@ function extension(pi: ExtensionAPI) {
     c.show(); ctx.ui.notify("Monitor shown", "info");
   }});
   pi.registerCommand("subagent-monitor-install", { description: "Install pi-subagent-monitor globally or locally", handler: async (_a: string, ctx: ExtensionCommandContext) => {
-    const choice = await ctx.ui.ask("Where do you want to install pi-subagent-monitor?", [
-      { label: "Global (npm)", description: "Install via npm globally - pi discovers it automatically" },
-      { label: "Local (directory)", description: "Copy to a local directory and configure settings.json" },
-    ]);
+    const choice = await ctx.ui.select("Where do you want to install pi-subagent-monitor?", ["Global (npm)", "Local (directory)"]);
     if (!choice) { ctx.ui.notify("Installation cancelled", "info"); return; }
     if (choice === "Global (npm)") {
       ctx.ui.notify("Run: npm install -g pi-subagent-monitor", "info");
       ctx.ui.notify("Then add \"npm:pi-subagent-monitor\" to settings.json packages array", "info");
     } else {
-      const dir = await ctx.ui.ask("Enter the local directory path (e.g., ~/.pi/extensions):", []);
+      const dir = await ctx.ui.input("Enter the local directory path (e.g., ~/.pi/extensions):", "~/.pi/extensions");
       if (!dir) { ctx.ui.notify("Installation cancelled", "info"); return; }
       ctx.ui.notify(`Copy dist/index.js to ${dir}/pi-subagent-monitor/`, "info");
       ctx.ui.notify(`Add "${dir}/pi-subagent-monitor/index.js" to settings.json extensions array`, "info");
@@ -718,11 +715,7 @@ function extension(pi: ExtensionAPI) {
   pi.registerCommand("subagent-monitor-db", { description: "Switch monitor database scope (auto / project / global)", handler: async (_a: string, ctx: ExtensionCommandContext) => {
     const c = getController();
     const hint = c ? ` (current: ${c.getMonitor().getDbMode()})` : "";
-    const choice = await ctx.ui.ask(`Which database scope for the monitor?${hint}`, [
-      { label: "Auto", description: "PI_SUBAGENTS_HISTORY_DB_PATH env → per-project DB if it exists → global" },
-      { label: "Global", description: "Shared subagents-history.sqlite (all projects)" },
-      { label: "Project", description: "subagents-history-<project>.sqlite for the current CWD" },
-    ]);
+    const choice = await ctx.ui.select(`Which database scope for the monitor?${hint}`, ["Auto", "Global", "Project"]);
     if (!choice) { ctx.ui.notify("DB scope change cancelled", "info"); return; }
     const mode: MonitorDbMode = choice === "Global" ? "global" : choice === "Project" ? "project" : "auto";
     currentDbMode = mode;
