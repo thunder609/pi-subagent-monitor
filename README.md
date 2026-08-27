@@ -93,8 +93,10 @@ The panel also auto-opens on `session_start` when a UI is present.
 | Shortcut | Action |
 | --- | --- |
 | `ctrl+q` | Focus / unfocus the panel |
-| `ctrl+shift+j` | Hide the panel |
-| `ctrl+shift+k` | Show the panel |
+| `alt+h` | Hide the panel |
+| `alt+s` | Show the panel |
+
+You can also use the slash commands `/subagent-monitor-hide` and `/subagent-monitor-show` from the editor input.
 
 ## Use as a library
 
