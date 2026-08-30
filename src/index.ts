@@ -384,7 +384,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "down")) { if (this.selectedIndex < this.tasks.length - 1) { this.selectedIndex++; if (this.selectedIndex >= this.listScroll + this.lastVisibleRows) this.listScroll = this.selectedIndex - this.lastVisibleRows + 1; this.invalidate(); } }
     else if (matchesKey(data, "return") || matchesKey(data, "enter")) { const t = this.tasks[this.selectedIndex]; if (t) { this.openDetail(t); this.onExpand?.(true); } }
     else if (matchesKey(data, "r")) { this.tick(); }
-    else if (matchesKey(data, "a")) { this.allCwds = !this.allCwds; this.selectedIndex = 0; this.listScroll = 0; this.tick(); }
+    else if (matchesKey(data, "c")) { const t = this.tasks[this.selectedIndex]; if (t) { t.status = "cancelled"; t.ended_at = new Date().toISOString(); this.tick(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { if (this.onRequestUnfocus) this.onRequestUnfocus(); }
     else if (matchesKey(data, "alt+h")) { if (this.onHide) this.onHide(); }
   }
@@ -400,7 +400,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "p")) { if (this.selectedTask && this.onProject) { this.onProject(this.selectedTask, this.detailEvents); this.invalidate(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { this.closeDetail(); this.onExpand?.(false); }
     else if (matchesKey(data, "alt+h")) { if (this.onHide) this.onHide(); }
-    else if (matchesKey(data, "r")) { if (this.selectedTask) { this.detailEvents = this.fetchEvents(this.selectedTask.id); this.liveSessionLines = tailSession(this.selectedTask.nested_session_path); this.detailScroll = 0; this.followTail = true; this.invalidate(); } }
+    else if (matchesKey(data, "r")) { if (this.selectedTask) { if (this.selectedTask.status === "completed" || this.selectedTask.status === "failed") { this.selectedTask.status = "running"; this.selectedTask.started_at = new Date().toISOString(); } this.detailEvents = this.fetchEvents(this.selectedTask.id); this.liveSessionLines = tailSession(this.selectedTask.nested_session_path); this.detailScroll = 0; this.followTail = true; this.invalidate(); } }
   }
   private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "detail"; this.invalidate(); }
   private closeDetail(): void { this.viewMode = "list"; this.selectedTask = null; this.detailEvents = []; this.liveSessionLines = []; this.detailScroll = 0; this.followTail = true; this.invalidate(); }
