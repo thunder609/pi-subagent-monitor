@@ -18,14 +18,14 @@ Read-only by design: it never touches your agent sessions. It watches the subage
 ## How it works
 
 ```
-pi-subagents-j0k3r ──writes──> ~/.local/share/pi/subagents/subagents-history.sqlite
+your-agent ──writes──> ~/.local/share/pi/subagents/custom-db.sqlite
                                          │
                                          ▼ (read-only, 1s poll)
                          pi-subagent-monitor side panel
 ```
 
 The monitor polls the SQLite history database (via the built-in `node:sqlite`
-    The monitor uses `pi-subagents-j0k3r` (aka *joker*) as the base data source, which writes to the SQLite history database.
+    You can use any SQLite database containing the expected schema (tables `subagent_tasks` and `subagent_events` with compatible columns).
 module — no native dependencies) and, for the detail view, tails each task's
 own session JSONL to render its most recent conversation lines.
 
