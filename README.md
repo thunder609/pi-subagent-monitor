@@ -107,8 +107,9 @@ The panel header shows the active scope as `DB:A` (auto), `DB:P` (project), or `
 | `←` / `→` | Navigate to parent / first child task |
 | `P` | Project full log into the main editor area |
 | `b` / `Esc` | Back to list |
-| `r` | Refresh |
+| `r` | Refresh / Resume task (completed/failed → running) |
 | `a` | Toggle all-CWDs mode |
+| `c` | Cancel selected task (status → cancelled) |
 
 ### Global shortcuts
 
