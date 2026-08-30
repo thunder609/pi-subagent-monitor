@@ -8,3 +8,5 @@ fix-exports*.mjs
 fix-final.cjs
 reformat.cjs
 .atl/
+.codegraph/
+test-harness/*.sqlite
