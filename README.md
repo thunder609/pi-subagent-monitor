@@ -25,6 +25,7 @@ pi-subagents-j0k3r ──writes──> ~/.local/share/pi/subagents/subagents-his
 ```
 
 The monitor polls the SQLite history database (via the built-in `node:sqlite`
+    The monitor uses `pi-subagents-j0k3r` (aka *joker*) as the base data source, which writes to the SQLite history database.
 module — no native dependencies) and, for the detail view, tails each task's
 own session JSONL to render its most recent conversation lines.
 
