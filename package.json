@@ -1,7 +1,7 @@
 {
   "name": "pi-subagent-monitor",
-  "version": "0.7.1",
-  "description": "Pi extension and embeddable TUI component to monitor pi-subagents activity from the history SQLite database.",
+  "version": "0.8.0",
+  "description": "Pi extension and embeddable TUI component to monitor and run subagent tasks. Reads and writes the subagents history SQLite database.",
   "type": "module",
   "license": "MIT",
   "author": "thunder609",
@@ -61,7 +61,5 @@
       "dist/index.js"
     ]
   },
-  "dependencies": {
-    "pi-subagent-monitor": "^0.6.1"
-  }
+  "dependencies": {}
 }

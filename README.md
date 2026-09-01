@@ -1,8 +1,8 @@
 # pi-subagent-monitor
 
-A [Pi](https://github.com/badlogic/pi-mono) coding-agent extension (and embeddable TUI component) that shows **live `pi-subagents-j0k3r` activity** in a side panel — tasks, status, tokens, cost, duration, and full event logs.
+A [Pi](https://github.com/badlogic/pi-mono) coding-agent extension (and embeddable TUI component) that shows **live subagent activity** in a side panel — tasks, status, tokens, cost, duration, and full event logs.
 
-Read-only by design: it never touches your agent sessions. It watches the subagent history database that [`pi-subagents-j0k3r`](https://www.npmjs.com/package/pi-subagents-j0k3r) writes and renders it.
+Read-only by design: it never touches your agent sessions. It watches the subagent history SQLite database that any compatible generator writes and renders it.
 
 ## Features
 
@@ -25,9 +25,12 @@ your-agent ──writes──> ~/.local/share/pi/subagents/custom-db.sqlite
 ```
 
 The monitor polls the SQLite history database (via the built-in `node:sqlite`
-    You can use any SQLite database containing the expected schema (tables `subagent_tasks` and `subagent_events` with compatible columns).
 module — no native dependencies) and, for the detail view, tails each task's
 own session JSONL to render its most recent conversation lines.
+
+You can use any SQLite database containing the expected schema (tables
+`subagent_tasks` and `subagent_events` with compatible columns) — the monitor
+does not care which generator wrote it.
 
 ## Requirements
 
@@ -83,21 +86,82 @@ The panel also auto-opens on `session_start` when a UI is present.
 
 ### Database scoping
 
-The panel reads the history SQLite database that the subagent generator writes. By default the scope is **auto**:
+The panel reads a SQLite history database that any compatible subagent
+generator writes. You can point it at a single shared global database, a
+different database per project, or let it auto-detect based on the
+environment.
 
-1. Use `PI_SUBAGENTS_HISTORY_DB_PATH` if set (the generator honors the same variable)
-2. Otherwise use a per-project database `subagents-history-<project>.sqlite` if one exists
-3. Otherwise fall back to the shared global database
+The panel header shows the active scope as `DB:A` (auto), `DB:P` (project), or
+`DB:G` (global) together with the database file name so you always know which
+one is being read.
 
-The project name is the git root basename (or the cwd basename when not in a git repo); you can pin it with `PI_SUBAGENTS_PROJECT_NAME`.
+#### Option A: Global (one database for everything)
 
-To keep separate per-project history, launch the agent generator with a project-scoped path:
+Use the default global database, shared across every project:
 
-```bash
-PI_SUBAGENTS_HISTORY_DB_PATH=~/.local/share/pi/subagents/subagents-history-my-project.sqlite pi
+```
+~/.local/share/pi/subagents/subagents-history.sqlite
 ```
 
-The panel header shows the active scope as `DB:A` (auto), `DB:P` (project), or `DB:G` (global) with the database file name.
+Setup steps:
+
+1. Launch your subagent generator with no extra config (it writes to the
+   default global path).
+2. In Pi, run `/subagent-monitor-db` and choose **Global**.
+3. The panel header will show `DB:G` and `subagents-history.sqlite`.
+
+Best for: a single project, or when you want to see every subagent task from
+every project in the same panel.
+
+#### Option B: Per-project (one database per project)
+
+Isolate each project's history into its own SQLite file:
+
+```
+~/.local/share/pi/subagents/subagents-history-<project>.sqlite
+```
+
+`<project>` is the git root basename (or the cwd basename when not in a git
+repo); pin it with `PI_SUBAGENTS_PROJECT_NAME`.
+
+Setup steps:
+
+1. Launch your subagent generator with the project-scoped path, for example:
+
+   ```bash
+   export PI_SUBAGENTS_HISTORY_DB_PATH=~/.local/share/pi/subagents/subagents-history-my-project.sqlite
+   pi
+   ```
+
+   Put the `export` line in the project's shell rc (or a project-local
+   `.env`) so it is set every time you launch Pi from that directory.
+
+2. In Pi, run `/subagent-monitor-db` and choose **Project**.
+3. The panel header will show `DB:P` and the per-project file name.
+
+Best for: multiple projects where you want clean isolation — deleting one
+project's database does not affect the others.
+
+#### Option C: Auto (default, env var override)
+
+The default mode. Resolution order on every read:
+
+1. If `PI_SUBAGENTS_HISTORY_DB_PATH` is set, use that exact path.
+2. Otherwise, if a per-project file `subagents-history-<project>.sqlite`
+   exists, use it.
+3. Otherwise, fall back to the global database.
+
+Setup steps:
+
+1. (Optional) Set `PI_SUBAGENTS_HISTORY_DB_PATH` to a custom path when you
+   want a non-default database.
+2. Do nothing else — the monitor picks the right one based on the rules
+   above.
+3. The panel header will show `DB:A`.
+
+Best for: most users. Lets you opt into per-project isolation per directory
+without changing the panel mode, while still working out-of-the-box when no
+env var is set.
 
 ### Panel controls
 

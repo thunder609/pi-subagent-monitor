@@ -9,4 +9,5 @@ fix-final.cjs
 reformat.cjs
 .atl/
 .codegraph/
+.pi/
 test-harness/*.sqlite

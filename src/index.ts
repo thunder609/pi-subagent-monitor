@@ -1,10 +1,14 @@
 import { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Component, OverlayHandle, TUI, KeybindingsManager, visibleWidth, matchesKey } from "@earendil-works/pi-tui";
-import { join, dirname, basename, resolve } from "path";
+import { join, basename } from "path";
 import { homedir } from "os";
-import { openSync, readSync, closeSync, fstatSync, existsSync } from "fs";
-import { execSync } from "child_process";
+import { existsSync, openSync, readSync, closeSync, fstatSync } from "fs";
 import { createRequire as createNodeRequire } from "module";
+import { DEFAULT_DB_PATH, resolveMonitorDbPath } from "./db-path";
+import type { MonitorDbMode } from "./db-path";
+import { registerGeneratorCommands } from "./generator";
+import type { SubagentTask, SubagentEvent, ViewMode, TaskNode } from "./types";
+import { buildTaskTree } from "./types";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
 
 // Runtime require for node:sqlite: keeps the specifier verbatim regardless of
@@ -13,46 +17,8 @@ import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
 const nodeRequire = createNodeRequire(import.meta.url);
 const { DatabaseSync } = nodeRequire("node:sqlite") as typeof import("node:sqlite");
 
-export const DEFAULT_DB_PATH = join(homedir(), ".local/share/pi/subagents/subagents-history.sqlite");
+export { DEFAULT_DB_PATH } from "./db-path";
 export const DEFAULT_INTERVAL_MS = 1000;
-
-// --- Database scoping ---
-// The GENERATOR (pi-subagents-j0k3r) honors PI_SUBAGENTS_HISTORY_DB_PATH (explicit
-// file) and PI_SUBAGENTS_HISTORY_HOME (directory). The monitor mirrors that so the
-// user can read either the shared global DB or a project-scoped one:
-//   auto    -> env var if set, else project DB if it exists, else global
-//   project -> subagents-history-<project>.sqlite next to the global DB
-//   global  -> the shared subagents-history.sqlite
-export type MonitorDbMode = "auto" | "project" | "global";
-
-/** Derive a stable project name from a working directory: git root basename,
- *  falling back to the cwd basename. */
-export function projectNameForCwd(cwd: string): string {
-  const envName = process.env.PI_SUBAGENTS_PROJECT_NAME;
-  if (envName && envName.trim()) return envName.trim();
-  try {
-    const root = execSync("git rev-parse --show-toplevel", { cwd, encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
-    if (root) return basename(root);
-  } catch { /* not a git repo — fall through */ }
-  return basename(cwd) || "project";
-}
-
-function slugify(name: string): string { return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "project"; }
-
-export function projectScopedDbPath(cwd: string): string {
-  return join(dirname(DEFAULT_DB_PATH), `subagents-history-${slugify(projectNameForCwd(cwd))}.sqlite`);
-}
-
-/** Effective DB path for a mode: the generator writes the same file when
- *  PI_SUBAGENTS_HISTORY_DB_PATH is set, so the monitor must honor it first. */
-export function resolveMonitorDbPath(mode: MonitorDbMode, cwd: string): string {
-  if (mode === "project") return projectScopedDbPath(cwd);
-  if (mode === "global") return DEFAULT_DB_PATH;
-  const envPath = process.env.PI_SUBAGENTS_HISTORY_DB_PATH;
-  if (envPath) return resolve(envPath);
-  const projectDb = projectScopedDbPath(cwd);
-  return existsSync(projectDb) ? projectDb : DEFAULT_DB_PATH;
-}
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -231,62 +197,10 @@ function boxLineCentered(content: string, W: number): string {
   return color("║ ", "cyan") + " ".repeat(left) + text + " ".repeat(right) + color(" ║", "cyan");
 }
 
-export interface SubagentTask {
-  id: string; cwd: string; agent: string; mode: string; status: string;
-  started_at: string | null; ended_at: string | null;
-  usage_input: number | null; usage_output: number | null;
-  usage_cache_read: number | null; usage_cache_write: number | null;
-  usage_cost: number | null; usage_turns: number | null;
-  model: string | null; effort: string | null;
-  last_activity: string | null; last_activity_at: string | null;
-  created_at: string; session_id: string | null; nested_session_path: string | null;
-}
-export interface SubagentEvent {
-  created_at: string; status: string; activity: string | null; output_preview: string | null;
-}
-export type ViewMode = "list" | "detail";
+// Re-export shared types so existing library consumers keep working.
+export type { SubagentTask, SubagentEvent, ViewMode, TaskNode } from "./types";
 
-export interface TaskNode {
-  task: SubagentTask; parentId: string | null;
-  childrenIds: string[]; siblingIndex: number; siblingCount: number;
-}
-
-export function buildTaskTree(tasks: SubagentTask[]): Map<string, TaskNode> {
-  const nodeMap = new Map<string, TaskNode>();
-  for (const task of tasks) {
-    nodeMap.set(task.id, { task, parentId: null, childrenIds: [], siblingIndex: 0, siblingCount: 1 });
-  }
-  const bySession = new Map<string, SubagentTask[]>();
-  for (const task of tasks) {
-    if (task.session_id) {
-      const arr = bySession.get(task.session_id) || [];
-      arr.push(task);
-      bySession.set(task.session_id, arr);
-    }
-  }
-  for (const [, sessionTasks] of bySession) {
-    sessionTasks.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    for (let i = 0; i < sessionTasks.length; i++) {
-      const node = nodeMap.get(sessionTasks[i].id)!;
-      node.siblingIndex = i; node.siblingCount = sessionTasks.length;
-      if (i > 0) node.parentId = sessionTasks[i - 1].id;
-    }
-  }
-  for (const task of tasks) {
-    if (task.nested_session_path) {
-      const childSessionId = task.nested_session_path.split("/").pop()?.replace(".jsonl", "");
-      if (childSessionId) {
-        const children = tasks.filter(t => t.session_id === childSessionId);
-        for (const child of children) {
-          const childNode = nodeMap.get(child.id)!;
-          childNode.parentId = task.id;
-          nodeMap.get(task.id)!.childrenIds.push(child.id);
-        }
-      }
-    }
-  }
-  return nodeMap;
-}
+export { buildTaskTree } from "./types";
 
 // --- Monitor Component ---
 class SubagentMonitorComponent implements Component {
@@ -302,6 +216,9 @@ class SubagentMonitorComponent implements Component {
   private dbMode: MonitorDbMode = "auto";
   private listScroll = 0; private lastVisibleRows = 10;
   private followTail = true; private spinnerFrame = 0;
+  private rPressedCount = 0;
+  private lastResumeError: string | null = null;
+  private lastResumeTarget: string | null = null;
   private liveSessionLines: SessionLine[] = [];
   private heightProvider?: () => number;
   private onProject?: (task: SubagentTask, events: SubagentEvent[]) => void;
@@ -342,10 +259,10 @@ class SubagentMonitorComponent implements Component {
     try {
       let sql: string;
       if (this.allCwds) {
-        sql = "SELECT id, cwd, agent, mode, status, started_at, ended_at, usage_input, usage_output, usage_cache_read, usage_cache_write, usage_cost, usage_turns, model, effort, last_activity, last_activity_at, created_at, session_id, nested_session_path FROM subagent_tasks ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, created_at DESC LIMIT 50";
+        sql = "SELECT id, cwd, agent, mode, status, started_at, ended_at, usage_input, usage_output, usage_cache_read, usage_cache_write, usage_cost, usage_turns, model, effort, last_activity, last_activity_at, created_at, session_id, nested_session_path, attempt FROM subagent_tasks ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, created_at DESC LIMIT 50";
         const stmt = this.db.prepare(sql); return stmt.all() as unknown as SubagentTask[];
       }
-      sql = "SELECT id, cwd, agent, mode, status, started_at, ended_at, usage_input, usage_output, usage_cache_read, usage_cache_write, usage_cost, usage_turns, model, effort, last_activity, last_activity_at, created_at, session_id, nested_session_path FROM subagent_tasks WHERE cwd = ? ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, created_at DESC LIMIT 30";
+      sql = "SELECT id, cwd, agent, mode, status, started_at, ended_at, usage_input, usage_output, usage_cache_read, usage_cache_write, usage_cost, usage_turns, model, effort, last_activity, last_activity_at, created_at, session_id, nested_session_path, attempt FROM subagent_tasks WHERE cwd = ? ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, created_at DESC LIMIT 30";
       const stmt = this.db.prepare(sql); return stmt.all(this.cwd) as unknown as SubagentTask[];
     } catch (e) { this.dbError = e instanceof Error ? e.message : String(e); return []; }
   }
@@ -353,6 +270,99 @@ class SubagentMonitorComponent implements Component {
     if (!this.db || !taskId) return [];
     try { const sql = "SELECT created_at, status, activity, output_preview FROM subagent_events WHERE task_id = ? ORDER BY created_at ASC"; const stmt = this.db.prepare(sql); return stmt.all(taskId) as unknown as SubagentEvent[]; }
     catch { return []; }
+  }
+  /** Full resume: creates new attempt, updates task to queued/running, inserts resume event. */
+  private resumeTask(task: SubagentTask): void {
+    this.lastResumeError = null;
+    this.lastResumeTarget = task.id;
+    const writeDb = new DatabaseSync(this.dbPath, { readOnly: false });
+    try {
+      const now = new Date().toISOString();
+      const newAttempt = (task.attempt || 1) + 1;
+
+      // Validate: task must exist in subagent_tasks. Without this guard, the
+      // INSERT...SELECT inserts 0 rows silently and the task is never resumed.
+      const exists = writeDb.prepare(`SELECT 1 AS x FROM subagent_tasks WHERE id = ?`).get(task.id);
+      if (!exists) {
+        this.lastResumeError = `task id not found in subagent_tasks: ${task.id}`;
+        return;
+      }
+      writeDb.exec(`
+      INSERT INTO subagent_task_attempts (
+        task_id, attempt, cwd, agent, mode, status, task, context,
+        created_at, session_id, nested_session_path,
+        started_at, ended_at, last_activity_at, last_activity,
+        output_preview, prompt, continuation_prompt, system_prompt,
+        transcript, usage_input, usage_output, usage_cache_read, usage_cache_write,
+        usage_cost, usage_context_tokens, usage_turns, model, effort,
+        model_source, effort_source, fallback_used, error, error_metadata_json,
+        error_category, result, thread_snapshot_json,
+        pi_retry_attempts, pending_message_count, undelivered_message_count
+      ) SELECT 
+        '${task.id}', ${newAttempt}, cwd, agent, mode, 'running', task, context,
+        '${now}', session_id, nested_session_path,
+        '${now}', NULL, '${now}', 'resumed',
+        output_preview, prompt, continuation_prompt, system_prompt,
+        transcript, usage_input, usage_output, usage_cache_read, usage_cache_write,
+        usage_cost, usage_context_tokens, usage_turns, model, effort,
+        model_source, effort_source, fallback_used, error, error_metadata_json,
+        error_category, result, thread_snapshot_json,
+        pi_retry_attempts, pending_message_count, undelivered_message_count
+      FROM subagent_tasks WHERE id = '${task.id}'
+      `);
+      writeDb.exec(`
+      UPDATE subagent_tasks SET status='queued', attempt=${newAttempt} WHERE id='${task.id}'
+      `);
+      writeDb.exec(`
+      UPDATE subagent_tasks 
+      SET status='running', started_at='${now}',
+          last_activity_at='${now}', last_activity='resumed',
+          ended_at=NULL
+      WHERE id='${task.id}'
+      `);
+      writeDb.exec(`
+      INSERT INTO subagent_events (task_id, attempt, cwd, created_at, status, activity, output_preview)
+      VALUES ('${task.id}', ${newAttempt}, '${this.cwd}', '${now}', 'running', 'resumed', NULL)
+      `);
+      task.status = "running";
+      task.attempt = newAttempt;
+      task.started_at = now;
+      task.last_activity_at = now;
+      task.last_activity = "resumed";
+    } catch (e) {
+      this.lastResumeError = String((e as Error)?.message ?? e);
+      console.error("Resume failed:", e);
+    } finally {
+      writeDb.close();
+    }
+  }
+  private cancelTask(task: SubagentTask): void {
+    this.lastResumeError = null;
+    this.lastResumeTarget = task.id;
+    const writeDb = new DatabaseSync(this.dbPath, { readOnly: false });
+    try {
+      const now = new Date().toISOString();
+      // Validate: task must exist; UPDATE on missing row would silently affect 0 rows.
+      const exists = writeDb.prepare(`SELECT 1 AS x FROM subagent_tasks WHERE id = ?`).get(task.id);
+      if (!exists) {
+        this.lastResumeError = `cancel: task id not found in subagent_tasks: ${task.id}`;
+        return;
+      }
+      const result = writeDb.prepare(`UPDATE subagent_tasks SET status = 'cancelled', ended_at = ?, last_activity_at = ?, last_activity = 'cancelled' WHERE id = ?`).run(now, now, task.id);
+      if (result.changes === 0) {
+        this.lastResumeError = `cancel: UPDATE affected 0 rows for id=${task.id}`;
+        return;
+      }
+      task.status = "cancelled";
+      task.ended_at = now;
+      task.last_activity_at = now;
+      task.last_activity = "cancelled";
+    } catch (e) {
+      this.lastResumeError = String((e as Error)?.message ?? e);
+      console.error("Cancel failed:", e);
+    } finally {
+      writeDb.close();
+    }
   }
   private refreshTree(): void { this.taskTree = buildTaskTree(this.tasks); }
   start(): void { if (!this.connect()) return; this.running = true; this.tick(); this.intervalId = setInterval(() => this.tick(), this.intervalMs); }
@@ -384,7 +394,7 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "down")) { if (this.selectedIndex < this.tasks.length - 1) { this.selectedIndex++; if (this.selectedIndex >= this.listScroll + this.lastVisibleRows) this.listScroll = this.selectedIndex - this.lastVisibleRows + 1; this.invalidate(); } }
     else if (matchesKey(data, "return") || matchesKey(data, "enter")) { const t = this.tasks[this.selectedIndex]; if (t) { this.openDetail(t); this.onExpand?.(true); } }
     else if (matchesKey(data, "r")) { this.tick(); }
-    else if (matchesKey(data, "c")) { const t = this.tasks[this.selectedIndex]; if (t) { t.status = "cancelled"; t.ended_at = new Date().toISOString(); this.tick(); } }
+    else if (matchesKey(data, "c")) { const t = this.tasks[this.selectedIndex]; if (t) { this.cancelTask(t); this.tick(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { if (this.onRequestUnfocus) this.onRequestUnfocus(); }
     else if (matchesKey(data, "alt+h")) { if (this.onHide) this.onHide(); }
   }
@@ -400,7 +410,21 @@ class SubagentMonitorComponent implements Component {
     else if (matchesKey(data, "p")) { if (this.selectedTask && this.onProject) { this.onProject(this.selectedTask, this.detailEvents); this.invalidate(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { this.closeDetail(); this.onExpand?.(false); }
     else if (matchesKey(data, "alt+h")) { if (this.onHide) this.onHide(); }
-    else if (matchesKey(data, "r")) { if (this.selectedTask) { if (this.selectedTask.status === "completed" || this.selectedTask.status === "failed") { this.selectedTask.status = "running"; this.selectedTask.started_at = new Date().toISOString(); } this.detailEvents = this.fetchEvents(this.selectedTask.id); this.liveSessionLines = tailSession(this.selectedTask.nested_session_path); this.detailScroll = 0; this.followTail = true; this.invalidate(); } }
+    else if (matchesKey(data, "r")) {
+          this.rPressedCount++;
+          console.error("[PI-MON-DEBUG] detail r pressed, count=", this.rPressedCount, "selectedTask=", this.selectedTask?.id, "status=", this.selectedTask?.status, "raw data=", JSON.stringify(data));
+          if (this.selectedTask) {
+            const status = this.selectedTask.status?.trim().toLowerCase() || "";
+            console.error("[PI-MON-DEBUG] normalized status=", JSON.stringify(status));
+            // PLAN C: always call resumeTask to confirm whether the handler runs.
+            this.resumeTask(this.selectedTask);
+            this.detailEvents = this.fetchEvents(this.selectedTask.id);
+            this.liveSessionLines = tailSession(this.selectedTask.nested_session_path);
+            this.detailScroll = 0;
+            this.followTail = true;
+            this.invalidate();
+          }
+        }
   }
   private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "detail"; this.invalidate(); }
   private closeDetail(): void { this.viewMode = "list"; this.selectedTask = null; this.detailEvents = []; this.liveSessionLines = []; this.detailScroll = 0; this.followTail = true; this.invalidate(); }
@@ -474,7 +498,7 @@ class SubagentMonitorComponent implements Component {
     const below = this.listScroll + this.lastVisibleRows < totalTasks ? color("↓" + (totalTasks - this.listScroll - this.lastVisibleRows) + " ", "cyan") : "";
     const barContent = liveBadge + " " + color(truncate(currentName, 18), "white") + " " + above + below + color("[Enter] vivo ", "cyan") + color("[r] ↻ ", "yellow") + color("[a] all", "cyan");
     lines.push(boxLine(barContent, W));
-    const help = "[↑/↓] select • [Enter] expand • [ctrl+q] focus • [alt+h] hide • Tasks: " + totalTasks;
+    const help = "[↑/↓] select • [Enter] expand • [ctrl+q] focus • [alt+h] hide • Tasks: " + totalTasks + " • r:" + this.rPressedCount + (this.lastResumeError ? " • err:" + this.lastResumeError : "");
     lines.push(boxLine(color(help, "dim"), W));
     lines.push(boxBottom(W));
   }
@@ -550,7 +574,7 @@ class SubagentMonitorComponent implements Component {
     const followTag = this.followTail ? color("▼live", "green") : color("⏸paused", "yellow");
     const barContent2 = statusBadge2 + " " + followTag + " " + navParent + " " + navChild + " " + navProject + " " + navClose2 + " " + navRefresh2;
     lines.push(boxLine(barContent2, W));
-    const help2 = "[↑/↓] scroll • [←/→] tree • [P] project • [b/Esc] back" + (this.followTail ? "" : " • [↓/End] resume live");
+    const help2 = "[↑/↓] scroll • [←/→] tree • [P] project • [b/Esc] back" + (this.followTail ? "" : " • [↓/End] resume live") + " • r:" + this.rPressedCount + (this.lastResumeError ? " • err:" + this.lastResumeError : "");
     lines.push(boxLine(color(help2, "dim"), W));
     lines.push(boxBottom(W));
   }
@@ -758,7 +782,19 @@ function extension(pi: ExtensionAPI) {
       });
     } catch { /* another copy already registered this shortcut */ }
   }
-  pi.on("session_start", async (_event, ctx) => {
+  // Generator commands (misubagent-spawn/cancel/resume) ship in the same
+      // package; registering them here keeps the lifecycle and the
+      // SHORTCUT_FLAG guard in one place. Outer try/catch so a generator
+      // failure can never block the session_start / session_shutdown handlers
+      // that follow — the monitor panel is more important than the generator.
+      try {
+        registerGeneratorCommands(pi);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[pi-subagent-monitor] generator registration failed:", e);
+      }
+
+      pi.on("session_start", async (_event, ctx) => {
     if (ctx.hasUI && !getController() && !g[AUTO_FLAG]) {
       g[AUTO_FLAG] = true;
       setTimeout(() => { const dummyCtx: ExtensionCommandContext = ctx as any; toggleMonitor(dummyCtx, currentAllCwds).catch(() => {}); }, 500);
