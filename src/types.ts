@@ -74,19 +74,7 @@ export interface TaskAttempt {
   ended_at: string | null;
 }
 
-/**
- * Body mode of the monitor side panel. After the subtask-id-detail-panel change
- * the panel switches between the task list and the new drawer's content via
- * the `"drawer"` literal. The legacy `"detail"` literal is preserved as a
- * deprecated alias constant for one release.
- */
-export type ViewMode = "list" | "drawer";
-
-/**
- * @deprecated Use `"drawer"` instead. Kept for one release so library
- * consumers can migrate without an immediate type break.
- */
-export const VIEW_MODE_DETAIL_ALIAS = "detail" as const;
+export type ViewMode = "list" | "detail";
 
 export interface TaskNode {
   task: SubagentTask;

@@ -37,17 +37,19 @@ async function main() {
   // ============================================================
   // TASK PADRE: orchestrator (foreground, spawnea subagents)
   // ============================================================
-  const orchestratorId = db.createTask(
-    process.cwd(),
-    "orchestrator",
-    "foreground",
-    rootSessionId,
-    researcherJsonl
-  );
+  const orchestratorId = db.createTask({
+    cwd: process.cwd(),
+    agent: "orchestrator",
+    mode: "foreground",
+    sessionId: rootSessionId,
+    nestedSessionPath: researcherJsonl,  // 👈 apunta al JSONL del HIJO
+    model: "claude-3.5-sonnet",
+    effort: "high"
+  });
   console.log(`📋 Orchestrator task: ${orchestratorId}`);
 
   db.startTask(orchestratorId);
-  db.addEvent(orchestratorId, "running", "Spawning researcher subagent");
+  db.addEvent({ taskId: orchestratorId, status: "running", activity: "Spawning researcher subagent" });
   db.logUserMessage(rootSessionId, "Necesito investigar y luego implementar una feature");
   await sleep(100);
   db.logAssistantMessage(rootSessionId, "Voy a spawnear un researcher para investigar y luego un coder para implementar");
@@ -56,18 +58,20 @@ async function main() {
   await sleep(100);
 
   db.updateUsage(orchestratorId, 500, 200, 0.0012);
-  db.addEvent(orchestratorId, "running", "Spawning researcher subagent");
+  db.addEvent({ taskId: orchestratorId, status: "running", activity: "Spawning researcher subagent", outputPreview: "spawn_subagent researcher..." });
 
   // ============================================================
   // TASK HIJO: researcher (background, research)
   // ============================================================
-  const researcherId = db.createTask(
-    process.cwd(),
-    "researcher",
-    "background",
-    researcherSessionId,
-    coderJsonl
-  );
+  const researcherId = db.createTask({
+    cwd: process.cwd(),
+    agent: "researcher",
+    mode: "background",
+    sessionId: researcherSessionId,
+    nestedSessionPath: coderJsonl,  // 👈 apunta al JSONL del NIETO
+    model: "claude-3.5-haiku",
+    effort: "medium"
+  });
   console.log(`🔍 Researcher task: ${researcherId}`);
 
   db.startTask(researcherId);
@@ -87,7 +91,7 @@ async function main() {
   await sleep(100);
 
   db.updateUsage(researcherId, 1200, 800, 0.0042);
-  db.addEvent(researcherId, "running", "Research completed, spawning coder");
+  db.addEvent({ taskId: researcherId, status: "running", activity: "Research completed, spawning coder", outputPreview: "spawn_subagent coder..." });
 
   // El researcher spawnea al coder
   db.logToolCall(researcherSessionId, "spawn_subagent", { agent: "coder", task: "Implementar auth JWT con refresh rotation" });
@@ -96,12 +100,15 @@ async function main() {
   // ============================================================
   // TASK NIETO: coder (background, implementation)
   // ============================================================
-  const coderId = db.createTask(
-    process.cwd(),
-    "coder",
-    "background",
-    coderSessionId
-  );
+  const coderId = db.createTask({
+    cwd: process.cwd(),
+    agent: "coder",
+    mode: "background",
+    sessionId: coderSessionId,
+    nestedSessionPath: undefined,  // sin hijos
+    model: "claude-3.5-sonnet",
+    effort: "high"
+  });
   console.log(`💻 Coder task: ${coderId}`);
 
   db.startTask(coderId);
@@ -133,7 +140,7 @@ async function main() {
   await sleep(100);
 
   db.updateUsage(coderId, 2500, 1800, 0.012);
-  db.addEvent(coderId, "running", "All tests passing");
+  db.addEvent({ taskId: coderId, status: "running", activity: "All tests passing", outputPreview: "npm test -- auth → PASS" });
 
   // Completar nieto primero
   db.completeTask(coderId, "completed");

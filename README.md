@@ -9,7 +9,7 @@ Read-only by design: it never touches your agent sessions. It watches the subage
 - **Live side panel** pegged to the right edge of the Pi TUI, refreshed every second
 - **Task list** with status colors, foreground/background (`FG`/`BG`) badges, token counts, cost estimates, and elapsed time
 - **Running-task indicator** — see at a glance which subagent is working right now
-- **Side drawer detail view**: per-subtask drawer that shows the full subtask `id` (no truncation) with a copy-id footer line, the live execution stream (`user`, `assistant`, `think`, `call`, `result`, `code`) read straight from the subagent's session JSONL, and a tool-call table with totals
+- **Drill-down detail view**: full event log per task, including tailed conversation lines (`user`, `assistant`, `think`, `call`, `result`, `code`) read straight from the subagent's session JSONL
 - **Parent/child navigation** across nested subagent trees (`session_id` / `nested_session_path`)
 - **Log projection** — project a task's full log into the main editor area for reading or copying
 - **Multi-project aware**: monitor only the current CWD or all tracked CWDs
@@ -168,16 +168,13 @@ env var is set.
 | Key | Action |
 | --- | --- |
 | `↑` / `↓` | Select task |
-| `Enter` | Open the subtask detail drawer (side panel, 48 cols) |
-| `←` / `→` | Inside the drawer: navigate to parent / first child task |
-| `c` | Inside the drawer: stage the full subtask `id` in the footer for copy-paste |
+| `Enter` | Open detail / event log |
+| `←` / `→` | Navigate to parent / first child task |
 | `P` | Project full log into the main editor area |
-| `b` / `Esc` | Back to list (or close drawer if open) |
+| `b` / `Esc` | Back to list |
 | `r` | Refresh / Resume task (completed/failed → running) |
 | `a` | Toggle all-CWDs mode |
-| `c` (in list) | Cancel selected task (status → cancelled) |
-
-The detail drawer is a persistent side overlay that shows the full subtask `id` (no truncation), the meta line (status, duration, tokens, cost), the live execution stream (parsed from the subtask's session JSONL when available) or the recorded event log fallback, and a tool-call table with totals. When the terminal is narrower than 96 columns the drawer temporarily hides the side panel so the two overlays do not collide.
+| `c` | Cancel selected task (status → cancelled) |
 
 ### Global shortcuts
 
@@ -198,15 +195,12 @@ import {
   SubagentMonitorComponent,
   ProjectedLogComponent,
   MonitorController,
-  TaskDetailDrawer,
   buildTaskTree,
   tailSession,
   formatDuration,
   formatTokens,
   formatCost,
   modeBadge,
-  detectTheme,
-  themeColors,
   DEFAULT_DB_PATH,
   DEFAULT_INTERVAL_MS,
   resolveMonitorDbPath,
@@ -218,18 +212,14 @@ import {
   type ViewMode,
   type TaskNode,
   type MonitorDbMode,
-  type Theme,
-  type ThemePalette,
 } from "pi-subagent-monitor";
 ```
 
 - `SubagentMonitorComponent` — self-contained monitor panel (`Component`)
 - `ProjectedLogComponent` — full event-log view for a single task
-- `TaskDetailDrawer` — per-subtask side drawer (full id, live stream, tool-call table with totals, copy-id footer)
-- `MonitorController` — wires the monitor into a `TUI` overlay and handles projection and the new drawer
+- `MonitorController` — wires the monitor into a `TUI` overlay and handles projection
 - `buildTaskTree` — organizes flat tasks into a parent/child/sibling tree using `session_id` / `nested_session_path`
 - `tailSession` — reads recent conversation lines from a subagent session JSONL
-- `detectTheme` / `themeColors` — terminal theme auto-detection (dark default, light on strong hint) and palette helpers
 - `formatDuration` / `formatTokens` / `formatCost` / `modeBadge` — display helpers
 - `resolveMonitorDbPath` / `projectScopedDbPath` / `projectNameForCwd` — database scoping helpers
 - `MonitorDbMode` — `"auto" | "project" | "global"` database scope type
