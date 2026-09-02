@@ -3,7 +3,7 @@
 // Genera DB + JSONL session files para ver en vivo
 
 import { getSubagentDB } from "./subagent-db.js";
-import { resolve } from "path";
+import * as path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
