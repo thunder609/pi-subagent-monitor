@@ -12,3 +12,4 @@ reformat.cjs
 .pi/
 test-harness/*.sqlite
 test-harness/.fixture-parent-child/
+coverage/
