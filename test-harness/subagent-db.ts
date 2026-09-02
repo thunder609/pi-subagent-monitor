@@ -4,11 +4,12 @@
 
 import { createRequire } from "module";
 import { DatabaseSync } from "node:sqlite";
-import { dirname, resolve } from "path";
 
 const nodeRequire = createRequire(import.meta.url);
 const { DatabaseSync: DB } = nodeRequire("node:sqlite") as typeof import("node:sqlite");
-const path = { dirname, resolve };
+
+function pathModule(): typeof import("path") { return require("path"); }
+const path = pathModule();
 
 export class SubagentDB {
   private db: DB;

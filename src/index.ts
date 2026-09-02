@@ -9,7 +9,6 @@ import type { MonitorDbMode } from "./db-path";
 import { registerGeneratorCommands } from "./generator";
 import type { SubagentTask, SubagentEvent, ViewMode, TaskNode } from "./types";
 import { buildTaskTree } from "./types";
-import { detectTheme } from "./theme";
 import type { DatabaseSync as DatabaseSyncInstance } from "node:sqlite";
 
 // Runtime require for node:sqlite: keeps the specifier verbatim regardless of
@@ -226,13 +225,11 @@ class SubagentMonitorComponent implements Component {
   private onRequestUnfocus?: () => void;
   private onExpand?: (expanded: boolean) => void;
   private onHide?: () => void;
-      private onOpenDrawer?: (task: SubagentTask, liveSessionLines: SessionLine[], events: SubagentEvent[]) => void;
 
-  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; dbMode?: MonitorDbMode; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void; onOpenDrawer?: (task: SubagentTask, liveSessionLines: SessionLine[], events: SubagentEvent[]) => void } = {}) {
+  constructor(options: { dbPath?: string; cwd?: string; allCwds?: boolean; intervalMs?: number; dbMode?: MonitorDbMode; heightProvider?: () => number; onProject?: (task: SubagentTask, events: SubagentEvent[]) => void; onRequestUnfocus?: () => void; onExpand?: (expanded: boolean) => void; onHide?: () => void } = {}) {
     this.cwd = options.cwd || process.cwd(); this.allCwds = options.allCwds || false;
     this.intervalMs = options.intervalMs || DEFAULT_INTERVAL_MS; this.onProject = options.onProject; this.onRequestUnfocus = options.onRequestUnfocus; this.onExpand = options.onExpand;
     this.heightProvider = options.heightProvider; this.onHide = options.onHide;
-    this.onOpenDrawer = options.onOpenDrawer;
     this.dbMode = options.dbMode ?? "auto";
     this.dbPath = options.dbPath || resolveMonitorDbPath(this.dbMode, this.cwd);
   }
@@ -376,7 +373,7 @@ class SubagentMonitorComponent implements Component {
       this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
       this.tasks = this.fetchTasks(); this.refreshTree();
       if (this.selectedIndex >= this.tasks.length) this.selectedIndex = Math.max(0, this.tasks.length - 1);
-      if (this.viewMode === "drawer" && this.selectedTask) {
+      if (this.viewMode === "detail" && this.selectedTask) {
         const stillExists = this.tasks.some(t => t.id === this.selectedTask!.id);
         if (!stillExists) { this.viewMode = "list"; this.selectedTask = null; this.detailEvents = []; this.liveSessionLines = []; this.detailScroll = 0; }
         else {
@@ -395,22 +392,7 @@ class SubagentMonitorComponent implements Component {
   private handleListInput(data: string): void {
     if (matchesKey(data, "up")) { if (this.selectedIndex > 0) { this.selectedIndex--; if (this.selectedIndex < this.listScroll) this.listScroll = this.selectedIndex; this.invalidate(); } }
     else if (matchesKey(data, "down")) { if (this.selectedIndex < this.tasks.length - 1) { this.selectedIndex++; if (this.selectedIndex >= this.listScroll + this.lastVisibleRows) this.listScroll = this.selectedIndex - this.lastVisibleRows + 1; this.invalidate(); } }
-    else if (matchesKey(data, "return") || matchesKey(data, "enter")) {
-      const t = this.tasks[this.selectedIndex];
-      if (t) {
-        // After the subtask-id-detail-panel change, Enter opens the drawer
-        // overlay (managed by MonitorController) instead of swapping the
-        // monitor's own body mode. Detail body rendering is now obsolete.
-        if (this.onOpenDrawer) {
-          this.onOpenDrawer(t, this.liveSessionLines, this.detailEvents);
-        } else {
-          // Fallback when no drawer is wired (e.g. consumer using only the
-          // monitor): keep the previous behaviour so existing library users
-          // are not broken.
-          this.openDetail(t);
-        }
-      }
-    }
+    else if (matchesKey(data, "return") || matchesKey(data, "enter")) { const t = this.tasks[this.selectedIndex]; if (t) { this.openDetail(t); this.onExpand?.(true); } }
     else if (matchesKey(data, "r")) { this.tick(); }
     else if (matchesKey(data, "c")) { const t = this.tasks[this.selectedIndex]; if (t) { this.cancelTask(t); this.tick(); } }
     else if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) { if (this.onRequestUnfocus) this.onRequestUnfocus(); }
@@ -444,7 +426,7 @@ class SubagentMonitorComponent implements Component {
           }
         }
   }
-  private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "drawer"; this.invalidate(); }
+  private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "detail"; this.invalidate(); }
   private closeDetail(): void { this.viewMode = "list"; this.selectedTask = null; this.detailEvents = []; this.liveSessionLines = []; this.detailScroll = 0; this.followTail = true; this.invalidate(); }
   invalidate(): void { this.cachedWidth = undefined; this.cachedLines = undefined; }
   render(width: number): string[] {
@@ -598,227 +580,6 @@ class SubagentMonitorComponent implements Component {
   }
 }
 
-// --- Task Detail Drawer ---
-/**
- * Side drawer that shows the full subtask id, meta, live execution stream,
- * tool-call table with totals, and a footer with key hints and the staged id
- * (when the user pressed 'c'). Pure view: no DB, no timer. Owned by the parent
- * SubagentMonitorComponent which feeds it a snapshot on every render.
- */
-export interface TaskDetailDrawerOptions {
-  task: SubagentTask;
-  liveSessionLines: SessionLine[];
-  events: SubagentEvent[];
-  theme: "dark" | "light";
-  parentId?: string | null;
-  firstChildId?: string | null;
-}
-
-interface ToolCallRow {
-  tool: string;
-  status: "ok" | "err";
-  args: string;
-}
-
-function deriveToolCallTable(lines: SessionLine[]): ToolCallRow[] {
-  const rows: ToolCallRow[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const l = lines[i];
-    if (l.kind !== "call") continue;
-    // Parse "→ <tool> <args...>" format
-    const m = l.text.match(/^\u2192\s+(\S+)(?:\s+(.*))?$/);
-    const tool = m ? m[1] : l.text;
-    const args = m && m[2] ? m[2] : "";
-    // Find next result line (if any) to determine status
-    let status: "ok" | "err" = "ok";
-    for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
-      if (lines[j].kind === "result") {
-        status = lines[j].text.startsWith("\u2717") ? "err" : "ok";
-        break;
-      }
-    }
-    rows.push({ tool, status, args });
-  }
-  return rows;
-}
-
-export class TaskDetailDrawer implements Component {
-  private task: SubagentTask;
-  private liveSessionLines: SessionLine[];
-  private events: SubagentEvent[];
-  private theme: "dark" | "light";
-  private stagedId: string | null = null;
-  private followTail = true;
-  private scroll = 0;
-  parentId: string | null;
-  firstChildId: string | null;
-  onClose: () => void = () => {};
-  onNavigateTo: (id: string) => void = () => {};
-  onStageId: (id: string) => void = () => {};
-
-  constructor(opts: TaskDetailDrawerOptions) {
-    this.task = opts.task;
-    this.liveSessionLines = opts.liveSessionLines;
-    this.events = opts.events;
-    this.theme = opts.theme;
-    this.parentId = opts.parentId ?? null;
-    this.firstChildId = opts.firstChildId ?? null;
-    this.followTail = opts.task.status === "running";
-  }
-
-  invalidate(): void {}
-
-  setLiveSessionLines(lines: SessionLine[]): void {
-    this.liveSessionLines = lines;
-  }
-  setEvents(events: SubagentEvent[]): void {
-    this.events = events;
-  }
-
-  private palette() {
-    return this.theme === "light"
-      ? { dim: "gray", accent: "blue", ok: "green", warn: "yellow", err: "red", fg: "white", live: "bgGreen", sel: "blue" }
-      : { dim: "dim", accent: "cyan", ok: "green", warn: "yellow", err: "red", fg: "white", live: "bgGreen", sel: "cyan" };
-  }
-
-  handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "q") || matchesKey(data, "b")) {
-      this.onClose();
-      return;
-    }
-    if (matchesKey(data, "left")) {
-      if (this.parentId) this.onNavigateTo(this.parentId);
-      return;
-    }
-    if (matchesKey(data, "right")) {
-      if (this.firstChildId) this.onNavigateTo(this.firstChildId);
-      return;
-    }
-    if (data === "c") {
-      this.stagedId = this.task.id;
-      this.onStageId(this.task.id);
-      return;
-    }
-    if (matchesKey(data, "up")) {
-      this.scroll++;
-      this.followTail = false;
-      return;
-    }
-    if (matchesKey(data, "down")) {
-      if (this.scroll > 0) this.scroll--;
-      if (this.scroll === 0) this.followTail = true;
-      return;
-    }
-    if (matchesKey(data, "end")) {
-      this.scroll = 0;
-      this.followTail = true;
-      return;
-    }
-  }
-
-  render(width: number): string[] {
-    const W = Math.max(36, width);
-    const lines: string[] = [];
-    const p = this.palette();
-    const isRunning = this.task.status === "running";
-
-    lines.push(boxTop(W));
-
-    // Header: agent + status badge (no id; id has its own line below)
-    const badge = isRunning ? color(" LIVE", p.live) : color(" " + String(this.task.status), "bold");
-    const headerInner = W - 4;
-    const headerText = truncate(this.task.agent, headerInner - badge.length) + badge;
-    lines.push(boxLine(color(headerText, isRunning ? "bold" : p.fg), W));
-
-    // Dedicated full-id line so the user can always copy/reference it
-    lines.push(boxLine(color(this.task.id, p.accent), W));
-
-    lines.push(boxSep(W));
-
-    // Meta line: id, mode, status, duration, tokens, cost
-    const started = this.task.started_at ? new Date(this.task.started_at).getTime() : null;
-    const ended = this.task.ended_at ? new Date(this.task.ended_at).getTime() : null;
-    const duration = started ? (ended || Date.now()) - started : 0;
-    const durStr = formatDuration(duration);
-    const tokStr = "\u2191" + formatTokens(this.task.usage_input) + " \u2193" + formatTokens(this.task.usage_output);
-    const costStr = formatCost(this.task.usage_cost);
-    const meta = `id ${truncate(this.task.id, 14)}\u2026  ${modeBadge(this.task.mode)}  ${this.task.status}  ${durStr}  ${tokStr}  ${costStr}`;
-    lines.push(boxLine(color(meta, p.dim), W));
-
-    lines.push(boxSep(W));
-
-    // Live execution stream or event fallback
-    const hasStream = this.liveSessionLines.length > 0;
-    const FOOTER_LINES = 4; // sep + table header + table totals + footer hints (approx)
-    const TABLE_HEADER_LINES = 3; // sep + header + sep
-    const availableRows = Math.max(4, 20 - lines.length - FOOTER_LINES - TABLE_HEADER_LINES);
-
-    if (hasStream) {
-      let scroll = this.scroll;
-      if (this.followTail) scroll = 0;
-      if (scroll > Math.max(0, this.liveSessionLines.length - availableRows)) {
-        scroll = Math.max(0, this.liveSessionLines.length - availableRows);
-      }
-      this.scroll = scroll;
-      const end = this.liveSessionLines.length - scroll;
-      const start = Math.max(0, end - availableRows);
-      const windowed = this.liveSessionLines.slice(start, end);
-      if (start > 0) lines.push(boxLine(color("\u2191 " + start + " earlier", p.accent), W));
-      for (const s of windowed) {
-        const style = s.kind === "code" ? "gray" : s.kind === "think" ? "cyan" : s.kind === "call" ? "magenta" : s.kind === "result" ? (s.text.startsWith("\u2717") ? "red" : "green") : s.kind === "user" ? "yellow" : "white";
-        lines.push(boxLine(color(s.text, style), W));
-      }
-      for (let p2 = windowed.length + (start > 0 ? 1 : 0); p2 < availableRows; p2++) lines.push(boxLine("", W));
-    } else if (!this.events.length && !isRunning) {
-      lines.push(boxLine(color("No events recorded", p.dim), W));
-    } else if (!this.events.length && isRunning) {
-      lines.push(boxLine(color("waiting for events\u2026", p.accent), W));
-      for (let p2 = 1; p2 < availableRows; p2++) lines.push(boxLine("", W));
-    } else {
-      const visible = this.events.slice(Math.max(0, this.events.length - availableRows));
-      for (const ev of visible) {
-        const time = new Date(ev.created_at).toLocaleTimeString();
-        const status = ev.status || "\u2014";
-        const activity = truncate(ev.activity || "\u2014", Math.max(10, W - 18));
-        lines.push(boxLine(color(time, p.dim) + " " + color("[" + status + "]", "bold") + " " + color(activity, p.fg), W));
-      }
-      for (let p2 = visible.length; p2 < availableRows; p2++) lines.push(boxLine("", W));
-    }
-
-    // Tool-call table
-    lines.push(boxSep(W, "\u2500"));
-    lines.push(boxLineCentered(color("Tool calls", p.accent), W));
-    lines.push(boxSep(W, "\u2500"));
-    const rows = deriveToolCallTable(this.liveSessionLines);
-    const okCount = rows.filter((r) => r.status === "ok").length;
-    const errCount = rows.filter((r) => r.status === "err").length;
-    if (!rows.length) {
-      lines.push(boxLine(color("(none)", p.dim), W));
-    } else {
-      const tableRows = Math.max(2, availableRows - 2);
-      for (const r of rows.slice(0, tableRows)) {
-        const flag = r.status === "err" ? color("\u2717", p.err) : color("\u2713", p.ok);
-        const toolName = truncate(r.tool, 16);
-        const args = truncate(r.args, W - 24);
-        lines.push(boxLine(`${flag} ${color(toolName, p.fg)} ${color(args, p.dim)}`, W));
-      }
-      if (rows.length > tableRows) lines.push(boxLine(color("(+ " + (rows.length - tableRows) + " more)", p.dim), W));
-    }
-    const totals = `${rows.length} call${rows.length === 1 ? "" : "s"}  ${errCount} failed`;
-    lines.push(boxLine(color(totals, p.dim), W));
-
-    // Footer: key hints + staged id
-    lines.push(boxSep(W));
-    const stagedLine = this.stagedId ? color("id staged: " + this.stagedId, p.accent) : "";
-    const hint = color("[Esc/b] close ", p.accent) + color("[\u2190/\u2192] tree ", this.parentId || this.firstChildId ? p.accent : p.dim) + color("[c] stage id ", p.accent);
-    lines.push(boxLine(hint, W));
-    if (stagedLine) lines.push(boxLine(stagedLine, W));
-    lines.push(boxBottom(W));
-
-    return lines;
-  }
-}
-
 // --- Projected Widget Component ---
 class ProjectedLogComponent implements Component {
   private task: SubagentTask; private events: SubagentEvent[]; private scroll = 0; private onClose: () => void;
@@ -864,9 +625,6 @@ class MonitorController implements Component {
   private monitor: SubagentMonitorComponent; private tui: TUI | null = null;
   private monitorHandle: OverlayHandle | null = null; private projectedHandle: OverlayHandle | null = null;
   private fsHandle: OverlayHandle | null = null; private expanded = false;
-  private drawerHandle: OverlayHandle | null = null;
-  private drawerInstance: TaskDetailDrawer | null = null;
-  private drawerTaskId: string | null = null;
   private allCwds: boolean; private hidden = false;
   constructor(tui: TUI, allCwds: boolean, dbMode: MonitorDbMode = "auto") {
     this.tui = tui; this.allCwds = allCwds;
@@ -875,9 +633,8 @@ class MonitorController implements Component {
       heightProvider: () => (this.tui ? this.tui.terminal.rows : 24),
       onProject: (task, events) => this.openProjectedLog(task, events),
       onRequestUnfocus: () => { this.monitorHandle?.unfocus(); this.tui?.requestRender(); },
-      onExpand: () => { /* legacy expand/collapse no-ops after drawer migration */ },
+      onExpand: (x) => { if (x) this.expand(); else this.collapse(); },
       onHide: () => this.hide(),
-      onOpenDrawer: (task, lines, events) => this.openDrawerFor(task, lines, events),
     });
     this.monitor.start(); this.createOverlay();
   }
@@ -885,62 +642,19 @@ class MonitorController implements Component {
     if (!this.tui) return;
     this.monitorHandle = this.tui.showOverlay(this.monitor, { anchor: "right-center", width: "17%", minWidth: 36, maxHeight: "100%", margin: { right: 0 }, nonCapturing: true, visible: (termWidth: number) => termWidth >= 72 });
   }
-  /**
-   * Open the per-subtask drawer to the right of the side panel. Replaces the
-   * old fullscreen detail swap. If the terminal is narrower than 96 columns,
-   * the side panel is hidden for the duration so the two overlays do not
-   * collide.
-   */
-  private openDrawerFor(task: SubagentTask, liveSessionLines: SessionLine[], events: SubagentEvent[]): void {
-    if (!this.tui) return;
-    if (this.drawerHandle && this.drawerTaskId === task.id) {
-      if (this.drawerInstance) {
-        this.drawerInstance.setLiveSessionLines(liveSessionLines);
-        this.drawerInstance.setEvents(events);
-      }
-      this.tui.requestRender();
-      return;
-    }
-    if (this.drawerHandle) this.closeDrawer();
-    const theme = detectTheme();
-    const drawer = new TaskDetailDrawer({
-      task,
-      liveSessionLines,
-      events,
-      theme,
-    });
-    drawer.onClose = () => this.closeDrawer();
-    drawer.onNavigateTo = (id) => {
-      const all = (this.monitor as any).tasks as SubagentTask[] | undefined;
-      const next = all?.find((t) => t.id === id);
-      if (next) this.openDrawerFor(next, [], []);
-    };
-    drawer.onStageId = () => { /* footer line already visible inside drawer */ };
-    this.drawerInstance = drawer;
-    this.drawerTaskId = task.id;
-    const termWidth = this.tui.terminal.columns;
-    const drawerVisible = termWidth >= 96;
-    if (!drawerVisible) this.monitorHandle?.setHidden(true);
-    this.drawerHandle = this.tui.showOverlay(drawer, {
-      anchor: "right-center",
-      width: 48,
-      minWidth: 48,
-      maxHeight: "100%",
-      margin: { right: 0 },
-      nonCapturing: false,
-    });
-    this.tui.requestRender();
+  /** Swap the side panel for a full-screen overlay of the SAME component (keeps state). */
+  private expand(): void {
+    if (!this.tui || this.expanded) return;
+    this.monitorHandle?.hide(); this.monitorHandle = null;
+    this.fsHandle = this.tui.showOverlay(this.monitor, { anchor: "center", width: "100%", maxHeight: "100%", margin: 0, nonCapturing: false });
+    this.expanded = true; this.tui.requestRender();
   }
-  /** Close the drawer overlay if one is open. Restores the side panel. */
-  private closeDrawer(): void {
-    if (this.drawerHandle) {
-      this.drawerHandle.setHidden(true);
-      this.drawerHandle = null;
-    }
-    this.drawerInstance = null;
-    this.drawerTaskId = null;
-    if (this.monitorHandle) this.monitorHandle.setHidden(false);
-    this.tui?.requestRender();
+  /** Return to the main screen: drop full screen, restore the side panel unfocused. */
+  private collapse(): void {
+    if (!this.tui || !this.expanded) return;
+    this.fsHandle?.hide(); this.fsHandle = null;
+    this.createOverlay();
+    this.expanded = false; this.tui.requestRender();
   }
   toggleFocus(): boolean {
     const handle = this.monitorHandle; if (!handle) return false;
@@ -960,7 +674,7 @@ class MonitorController implements Component {
   }
   invalidate(): void { this.monitor.invalidate(); }
   render(width: number): string[] { return []; }
-  dispose(): void { this.monitor.stop(); this.closeProjectedLog(); this.closeDrawer(); this.fsHandle?.hide(); this.fsHandle = null; if (this.monitorHandle) { this.monitorHandle.setHidden(true); this.monitorHandle = null; } this.hidden = false; }
+  dispose(): void { this.monitor.stop(); this.closeProjectedLog(); this.fsHandle?.hide(); this.fsHandle = null; if (this.monitorHandle) { this.monitorHandle.setHidden(true); this.monitorHandle = null; } this.hidden = false; }
   getMonitor(): SubagentMonitorComponent { return this.monitor; }
   getHandle(): OverlayHandle | null { return this.monitorHandle; }
   setDbMode(mode: MonitorDbMode): string { this.monitor.setDbMode(mode); return this.monitor.getDbPath(); }
