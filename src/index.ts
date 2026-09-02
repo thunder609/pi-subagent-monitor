@@ -373,7 +373,7 @@ class SubagentMonitorComponent implements Component {
       this.spinnerFrame = (this.spinnerFrame + 1) % SPINNER_FRAMES.length;
       this.tasks = this.fetchTasks(); this.refreshTree();
       if (this.selectedIndex >= this.tasks.length) this.selectedIndex = Math.max(0, this.tasks.length - 1);
-      if (this.viewMode === "detail" && this.selectedTask) {
+      if (this.viewMode === "drawer" && this.selectedTask) {
         const stillExists = this.tasks.some(t => t.id === this.selectedTask!.id);
         if (!stillExists) { this.viewMode = "list"; this.selectedTask = null; this.detailEvents = []; this.liveSessionLines = []; this.detailScroll = 0; }
         else {
@@ -426,7 +426,7 @@ class SubagentMonitorComponent implements Component {
           }
         }
   }
-  private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "detail"; this.invalidate(); }
+  private openDetail(task: SubagentTask): void { this.selectedTask = task; this.detailEvents = this.fetchEvents(task.id); this.liveSessionLines = tailSession(task.nested_session_path); this.detailScroll = 0; this.followTail = true; this.viewMode = "drawer"; this.invalidate(); }
   private closeDetail(): void { this.viewMode = "list"; this.selectedTask = null; this.detailEvents = []; this.liveSessionLines = []; this.detailScroll = 0; this.followTail = true; this.invalidate(); }
   invalidate(): void { this.cachedWidth = undefined; this.cachedLines = undefined; }
   render(width: number): string[] {
