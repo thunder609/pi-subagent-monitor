@@ -11,3 +11,5 @@ reformat.cjs
 .codegraph/
 .pi/
 test-harness/*.sqlite
+test-harness/.fixture-parent-child/
+coverage/

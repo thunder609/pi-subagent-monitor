@@ -1,6 +1,6 @@
 {
   "name": "pi-subagent-monitor",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Pi extension and embeddable TUI component to monitor and run subagent tasks. Reads and writes the subagents history SQLite database.",
   "type": "module",
   "license": "MIT",
@@ -37,6 +37,9 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "prepublishOnly": "npm run build"
   },
   "engines": {
@@ -53,8 +56,10 @@
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
     "@types/node": "^22.5.0",
+    "@vitest/coverage-v8": "^2.1.0",
     "tsup": "^8.3.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   },
   "pi": {
     "extensions": [
